@@ -1,22 +1,30 @@
-# campaigns
+# Campaign / Flight Metadata
 
-This table contains overall campaign metadata combining high level client, brand annd product information when available with specific campaign data such
-as channels used, country and regions where the campaign was run along with budget and spend in US dollars. 
+Master record for advertising campaigns. Contains two semantically equivalent columns — brand and advertiser — with identical values, intentionally to showcase Dataplex synonym detection. Channels and regions are arrays to support multi-market, multi-channel flights.
+
+## Tags
+- business_owner: Marketing Data Products
+- data_domain: campaigns
+- pii_class: none
+- refresh_cadence: daily
+- row_count_approx: 200
+- marketing_usecases: post_campaign_analysis,audience_discovery
 
 ## Columns
 
-- campaign_id: The unique Campaign ID which is an internal key generated at ingestion time 
-- campaign_name: The campaign name which 
-- brand: Brand if the advertiser has multiple brands
-- advertiser: The advertiser name - be aware that same advertisers might not be consistently named: IKEA, ikea, Ikea
-- product_category: <!-- Describe what this column represents -->
-- country_code: <!-- Describe what this column represents -->
-- regions: <!-- Describe what this column represents -->
-- channels: <!-- Describe what this column represents -->
-- objective: <!-- Describe what this column represents -->
-- budget_usd: <!-- Describe what this column represents -->
-- actual_spend_usd: <!-- Describe what this column represents -->
-- start_date: <!-- Describe what this column represents -->
-- end_date: <!-- Describe what this column represents -->
-- status: <!-- Describe what this column represents -->
-- created_at: <!-- Describe what this column represents -->
+- campaign_id: Primary key (UUID v4). Used as FK in pixel_events and creatives.
+- campaign_name: Human-readable campaign name combining brand, product category and sequence.
+- brand: Advertiser brand name. Synonym: advertiser (same table). Glossary term: Brand / Advertiser.
+- advertiser: Semantic duplicate of brand. Identical value. Present for synonym resolution demo.
+  - Synonym Of: brand
+- product_category: IAB product category for the campaign (e.g. Apparel, Beauty, CPG, Tech).
+- country_code: ISO 3166-1 alpha-2 code for the primary market.
+- regions: Target regions within the market (array of administrative units).
+- channels: Activated channels for this campaign (meta, youtube, tiktok, display, ctv, search).
+- objective: Campaign goal: awareness | consideration | conversion | retention.
+- budget_usd: Total approved budget in US dollars.
+- actual_spend_usd: Realised spend. May differ from budget_usd. Use for ROAS and CPA calculations.
+- start_date: Flight start date.
+- end_date: Flight end date.
+- status: Lifecycle state: planned | active | completed | paused.
+- created_at: Record creation timestamp.

@@ -255,23 +255,6 @@ class HybridMetadataEnricher:
         
         # Step 1: Load manual descriptions from markdown (default location)
         manual_table_desc, manual_column_descs = self._load_manual_descriptions(table_ref)
-    
-    def _generate_hybrid_descriptions_with_file(self, table_obj, metadata_file: str) -> Tuple[str, Dict[str, str]]:
-        """
-        Generate hybrid descriptions using explicit metadata file.
-        
-        Args:
-            table_obj: BigQuery Table object
-            metadata_file: Explicit path to metadata file
-            
-        Returns:
-            Tuple of (table_description, column_descriptions_dict)
-        """
-        table_id = table_obj.table_id
-        table_ref = f"{self.dataset_id}.{table_id}"
-        
-        # Step 1: Load manual descriptions from explicit markdown file
-        manual_table_desc, manual_column_descs = self._load_manual_descriptions(table_ref, metadata_file)
         
         # Step 2: Generate Google Table Insights
         insights_table_desc, insights_column_descs = self._generate_table_insights(table_ref)
@@ -298,6 +281,23 @@ class HybridMetadataEnricher:
                 final_column_descriptions[column_name] = insights_desc
         
         return final_table_description, final_column_descriptions
+    
+    def _generate_hybrid_descriptions_with_file(self, table_obj, metadata_file: str) -> Tuple[str, Dict[str, str]]:
+        """
+        Generate hybrid descriptions using explicit metadata file.
+        
+        Args:
+            table_obj: BigQuery Table object
+            metadata_file: Explicit path to metadata file
+            
+        Returns:
+            Tuple of (table_description, column_descriptions_dict)
+        """
+        table_id = table_obj.table_id
+        table_ref = f"{self.dataset_id}.{table_id}"
+        
+        # Step 1: Load manual descriptions from explicit markdown file
+        manual_table_desc, manual_column_descs = self._load_manual_descriptions(table_ref, metadata_file)
         
         # Step 2: Generate Google Table Insights
         insights_table_desc, insights_column_descs = self._generate_table_insights(table_ref)

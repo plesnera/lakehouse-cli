@@ -5,11 +5,26 @@ class MarketMatchRates(BaseModel):
     txn_cookie_fill_rate: float
     txn_hem_fill_rate: float
 
+# Production-scale defaults matching Agent.md spec
+FULL_SCALE = {
+    "n_audience_participants": 8_000,
+    "n_audience_segments": 500,
+    "n_cookies": 80_000,
+    "n_campaigns": 200,
+    "n_creatives_per_campaign": 5,
+    "n_pixel_events": 2_000_000,
+    "n_transactions": 500_000,
+}
+
+# Fictional brands from Agent.md
+BRANDS = ["Lucky Cola", "Force Automotive", "AEKI Living"]
+
+
 class GeneratorConfig(BaseModel):
     seed: int = 42
     target_markets: List[str] = ["US", "GB", "JP"]
 
-    # Scale (matches Agent.md spec)
+    # Scale — dev defaults for fast iteration; use FULL_SCALE for demo
     n_audience_participants: int = 100
     n_audience_segments: int = 10
     n_cookies: int = 1000

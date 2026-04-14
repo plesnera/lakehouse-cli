@@ -1,0 +1,48 @@
+config {
+  type: "table",
+  description: "Aggregated campaign performance metrics: impressions, clicks, CTR, CPC, VTR, engagement rate, and spend efficiency.",
+  tags: ["marketing", "performance"]
+}
+
+-- Derived metrics from lakehouse-final.md §1.6
+SELECT
+  c.campaign_id,
+  c.campaign_name,
+  c.brand,
+  c.country_code,
+  c.objective,
+  c.budget_usd,
+  c.actual_spend_usd,
+
+  -- Awareness metrics
+  COUNTIF(pe.event_type = 'impression') AS impressions,
+  COUNT(DISTINCT CASE WHEN pe.event_type = 'impression' THEN pe.cookie_id END) AS reach,
+  SAFE_DIVIDE(
+    COUNTIF(pe.event_type = 'impression'),
+    COUNT(DISTINCT CASE WHEN pe.event_type = 'impression' THEN pe.cookie_id END)
+  ) AS frequency,
+  SAFE_DIVIDE(SUM(pe.spend_usd), COUNTIF(pe.event_type = 'impression')) * 1000 AS cpm,
+
+  -- Engagement metrics
+  COUNTIF(pe.event_type = 'click') AS clicks,
+  SAFE_DIVIDE(
+    COUNTIF(pe.event_type = 'click'),
+    COUNTIF(pe.event_type = 'impression')
+  ) * 100 AS ctr,
+  SAFE_DIVIDE(c.actual_spend_usd, COUNTIF(pe.event_type = 'click')) AS cpc,
+  SAFE_DIVIDE(
+    COUNTIF(pe.event_type = 'video_complete'),
+    COUNTIF(pe.event_type = 'video_start')
+  ) AS vtr,
+  SAFE_DIVIDE(
+    COUNTIF(pe.event_type = 'engagement'),
+    COUNTIF(pe.event_type = 'impression')
+  ) AS engagement_rate
+
+FROM
+  ${ref("campaigns")} AS c
+LEFT JOIN
+  ${ref("pixel_events")} AS pe ON c.campaign_id = pe.campaign_id
+GROUP BY
+  c.campaign_id, c.campaign_name, c.brand, c.country_code,
+  c.objective, c.budget_usd, c.actual_spend_usd

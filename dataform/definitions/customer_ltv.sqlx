@@ -1,0 +1,20 @@
+config {
+  type: "table",
+  description: "Customer Lifetime Value (LTV) model. Aggregates total spend per pan_token and identifies first-transaction dates for CAC calculation.",
+  tags: ["marketing", "ltv"]
+}
+
+-- LTV and CAC metrics from lakehouse-final.md §1.6
+SELECT
+  t.pan_token,
+  t.country_code,
+  COUNT(*) AS transaction_count,
+  SUM(t.amount_usd) AS lifetime_value_usd,
+  MIN(t.txn_ts) AS first_transaction_ts,
+  MAX(t.txn_ts) AS last_transaction_ts,
+  TIMESTAMP_DIFF(MAX(t.txn_ts), MIN(t.txn_ts), DAY) AS customer_tenure_days,
+  SAFE_DIVIDE(SUM(t.amount_usd), COUNT(*)) AS avg_transaction_value_usd
+FROM
+  ${ref("transactions")} AS t
+GROUP BY
+  t.pan_token, t.country_code

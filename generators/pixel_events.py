@@ -48,7 +48,10 @@ class PixelEventGenerator(BaseGenerator):
 
         data = {
             "event_id": [str(uuid.uuid4()) for _ in range(n)],
-            "event_type": [np.random.choice(["impression", "click", "video_start", "video_complete", "engagement"], p=[0.7, 0.15, 0.05, 0.05, 0.05]) for _ in range(n)],
+            "event_type": [np.random.choice(
+                ["impression", "click", "video_start", "video_q1", "video_q2", "video_q3", "video_complete", "engagement"],
+                p=[0.60, 0.15, 0.05, 0.03, 0.03, 0.03, 0.04, 0.07]
+            ) for _ in range(n)],
             "cookie_id": [],
             "campaign_id": [],
             "creative_id": [np.random.choice(creative_ids) for _ in range(n)],

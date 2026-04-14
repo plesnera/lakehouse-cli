@@ -4,6 +4,7 @@ import tempfile
 import json
 from generators.config import GeneratorConfig
 from google.cloud import dataplex_v1
+from ingestion.table_metadata import load_all_table_metadata
 
 class TagWriter:
     def __init__(self, config: GeneratorConfig):
@@ -63,4 +64,57 @@ class TagWriter:
                 print(f"Warning: Could not create Aspect Type: {e}")
 
     def apply_tags(self):
-        print("Note: Automated tagging skipped.")
+        """Apply marketing_table_metadata aspect to each table entry.
+
+        Tag values are read from the ``## Tags`` section of each table's
+        markdown file in ``metadata_descriptions/``.  Edit those files to
+        change what gets applied to Dataplex entries.
+        """
+        parent = f"projects/{self.config.project_id}/locations/{self.config.location}"
+        entry_group_path = f"{parent}/entryGroups/marketing-lakehouse"
+        aspect_type_id = "marketing-table-metadata"
+
+        all_meta = load_all_table_metadata()
+        tables = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
+
+        for table_name in tables:
+            meta = all_meta.get(table_name)
+            if not meta or not meta.tags:
+                print(f"  ⚠️  No tags found in metadata for {table_name} — skipping")
+                continue
+            fields = meta.tags
+            entry_path = f"{entry_group_path}/entries/{table_name}"
+            aspect_key = f"{self.config.project_id}.{self.config.location}.{aspect_type_id}"
+
+            try:
+                # Build the aspect with field values
+                # Build aspect data dynamically from the parsed tags
+                aspect_data = {}
+                for k, v in fields.items():
+                    if k == "row_count_approx":
+                        aspect_data[k] = {"doubleValue": float(v)}
+                    else:
+                        aspect_data[k] = {"stringValue": str(v)}
+
+                aspect = dataplex_v1.Aspect(
+                    aspect_type=f"{parent}/aspectTypes/{aspect_type_id}",
+                    data=aspect_data,
+                )
+
+                # Get current entry, set aspect, update
+                entry = self.client.get_entry(name=entry_path)
+                if entry.aspects is None:
+                    entry.aspects = {}
+                entry.aspects[aspect_key] = aspect
+
+                update_mask = {"paths": [f"aspects.{aspect_key}"]}
+                self.client.update_entry(
+                    entry=entry,
+                    update_mask=update_mask,
+                )
+                print(f"  ✅ Applied tag to {table_name}")
+
+            except Exception as e:
+                print(f"  ⚠️  Failed to tag {table_name}: {e}")
+
+        print("Tag application complete.")

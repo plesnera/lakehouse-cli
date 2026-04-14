@@ -9,14 +9,23 @@ from ingestion.tag_writer import TagWriter
 from ingestion.glossary_writer import GlossaryWriter
 from ingestion.bq_metadata_hybrid import HybridMetadataEnricher
 from ingestion.glossary_manager import BusinessGlossaryManager
+from ingestion.data_profiling import DataProfilingManager
+from ingestion.data_quality import DataQualityManager
+from ingestion.vector_search import VectorSearchManager
+from ingestion.bqml_gemini import BQMLGeminiManager
+from ingestion.continuous_queries import ContinuousQueryManager
 import os
 import pyarrow.parquet as pq
 
 app = typer.Typer()
 
 @app.command()
-def generate(local: bool = False):
-    config = GeneratorConfig()
+def generate(
+    local: bool = False,
+    full_scale: bool = typer.Option(False, "--full-scale", help="Use production-scale row counts from Agent.md (8K audience, 80K cookies, 2M events, etc.)"),
+):
+    from generators.config import FULL_SCALE
+    config = GeneratorConfig(**FULL_SCALE) if full_scale else GeneratorConfig()
     orchestrator = Orchestrator(config)
     
     if local:
@@ -257,34 +266,167 @@ def validate(local: bool = True):
             if len(table) != expected[name]:
                 print(f"  WARNING: Row count mismatch. Expected {expected[name]}, got {len(table)}")
 
-            # Synonym check
+            # ---- Validation checks per table ----
+            def _fill_rate(col_data):
+                return sum(1 for x in col_data if x is not None) / len(col_data) if col_data else 0
+
+            def _check_rate(label, actual, target, tolerance=0.03):
+                print(f"  {label}: {actual:.1%} (target {target:.0%})")
+                if abs(actual - target) > tolerance:
+                    print(f"  FAILED: {label} {actual:.1%} outside +/- 3pp of {target:.0%}")
+
+            def _check_synonym(col_a_name, col_b_name):
+                a = table.column(col_a_name).to_pylist()
+                b = table.column(col_b_name).to_pylist()
+                if a != b:
+                    print(f"  FAILED: {col_a_name} != {col_b_name}")
+                else:
+                    print(f"  OK: {col_a_name} == {col_b_name}")
+
+            if name == "audience":
+                _check_rate("audience.hem fill", _fill_rate(table.column("hem").to_pylist()), config.audience_hem_fill_rate)
+                _check_synonym("lat", "location_lat")
+                _check_synonym("lon", "location_lon")
+
             if name == "cookie_registry":
-                c_id = table.column("cookie_id").to_pylist()
-                v_id = table.column("visitor_id").to_pylist()
-                if c_id != v_id:
-                    print("  FAILED: cookie_id != visitor_id")
-                
-                # Match rate checks
-                a_id = table.column("audience_id").to_pylist()
-                a_rate = sum(1 for x in a_id if x is not None) / len(a_id)
-                print(f"  cookie->audience fill rate: {a_rate:.1%}")
-                if abs(a_rate - config.cookie_audience_fill_rate) > 0.03:
-                    print(f"  FAILED: cookie->audience rate {a_rate:.1%} outside +/- 3pp of {config.cookie_audience_fill_rate:.1%}")
+                _check_synonym("cookie_id", "visitor_id")
+                _check_synonym("hem", "hashed_email")
+                _check_rate("cookie->audience fill", _fill_rate(table.column("audience_id").to_pylist()), config.cookie_audience_fill_rate)
+                _check_rate("cookie->hem fill", _fill_rate(table.column("hem").to_pylist()), config.cookie_hem_fill_rate)
+
+            if name == "campaigns":
+                _check_synonym("brand", "advertiser")
 
             if name == "pixel_events":
-                c_id = table.column("cookie_id").to_pylist()
-                p_rate = sum(1 for x in c_id if x is not None) / len(c_id)
-                print(f"  pixel->cookie fill rate: {p_rate:.1%}")
-                if abs(p_rate - config.pixel_cookie_fill_rate) > 0.03:
-                    print(f"  FAILED: pixel->cookie rate {p_rate:.1%} outside +/- 3pp of {config.pixel_cookie_fill_rate:.1%}")
-            
-            if name == "audience":
-                lat = table.column("lat").to_pylist()
-                l_lat = table.column("location_lat").to_pylist()
-                if lat != l_lat:
-                    print("  FAILED: lat != location_lat")
+                _check_rate("pixel->cookie fill", _fill_rate(table.column("cookie_id").to_pylist()), config.pixel_cookie_fill_rate)
+
+            if name == "transactions":
+                # Per-market transaction rates
+                import pyarrow.compute as pc
+                for market, rates in config.market_txn_rates.items():
+                    mask = pc.equal(table.column("country_code"), market)
+                    market_table = table.filter(mask)
+                    if len(market_table) == 0:
+                        continue
+                    c_rate = _fill_rate(market_table.column("cookie_id").to_pylist())
+                    h_rate = _fill_rate(market_table.column("hem").to_pylist())
+                    _check_rate(f"txn->cookie ({market})", c_rate, rates.txn_cookie_fill_rate)
+                    _check_rate(f"txn->hem ({market})", h_rate, rates.txn_hem_fill_rate)
 
     print("Validation checks finished.")
+
+
+@app.command()
+def profile(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print plan without creating scans"),
+    results: bool = typer.Option(False, "--results", help="Show latest profiling results instead of creating scans"),
+):
+    """Create and run Dataplex data profile scans for all tables."""
+    config = GeneratorConfig()
+    mgr = DataProfilingManager(config)
+    if results:
+        mgr.get_results()
+    else:
+        mgr.create_and_run_scans(dry_run=dry_run)
+
+
+@app.command()
+def quality(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print plan without creating scans"),
+    results: bool = typer.Option(False, "--results", help="Show latest quality results instead of creating scans"),
+):
+    """Create and run Dataplex data quality scans with marketing-specific rules."""
+    config = GeneratorConfig()
+    mgr = DataQualityManager(config)
+    if results:
+        mgr.get_results()
+    else:
+        mgr.create_and_run_scans(dry_run=dry_run)
+
+
+@app.command()
+def vector_search(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print SQL without executing"),
+):
+    """Set up BigQuery Vector Search: embedding model, embeddings, vector index, and example query."""
+    config = GeneratorConfig()
+    mgr = VectorSearchManager(config)
+    mgr.setup(dry_run=dry_run)
+
+
+@app.command()
+def bqml_setup(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print SQL without executing"),
+):
+    """Set up BigQuery ML Gemini remote model and run example text generation queries."""
+    config = GeneratorConfig()
+    mgr = BQMLGeminiManager(config)
+    mgr.setup(dry_run=dry_run)
+
+
+@app.command()
+def continuous_queries(
+    dry_run: bool = typer.Option(True, help="Print SQL without executing (default: True, requires Enterprise reservation)"),
+):
+    """Set up BigQuery continuous query for real-time CTR aggregation on pixel_events."""
+    config = GeneratorConfig()
+    mgr = ContinuousQueryManager(config)
+    mgr.setup(dry_run=dry_run)
+
+
+@app.command()
+def reset(
+    confirm: bool = typer.Option(False, "--confirm", help="Required to actually delete resources"),
+):
+    """Tear down all generated resources for a clean re-run.
+
+    Deletes: BQ external tables, Dataplex entries/tags, glossary resources,
+    and Iceberg catalog entries. Does NOT delete GCS data by default.
+    """
+    if not confirm:
+        print("⚠️  This will delete all marketing lakehouse resources.")
+        print("   Pass --confirm to proceed.")
+        return
+
+    config = GeneratorConfig()
+    from google.cloud import bigquery
+
+    # 1. Delete BQ external tables
+    print("Deleting BigQuery external tables...")
+    bq_client = bigquery.Client(project=config.project_id)
+    dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
+    for name in ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]:
+        table_id = f"{dataset_id}.{name}"
+        bq_client.delete_table(table_id, not_found_ok=True)
+        print(f"  Deleted BQ table: {name}")
+
+    # 2. Reset glossary
+    print("Resetting glossary...")
+    glossary_mgr = BusinessGlossaryManager(config)
+    try:
+        glossary_mgr.reset_glossary()
+    except Exception as e:
+        print(f"  ⚠️  Glossary reset: {e}")
+
+    # 3. Delete catalog entries
+    print("Deleting catalog entries...")
+    from google.cloud import dataplex_v1
+    catalog_client = dataplex_v1.CatalogServiceClient()
+    parent = f"projects/{config.project_id}/locations/{config.location}/entryGroups/marketing-lakehouse"
+    for name in ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]:
+        try:
+            catalog_client.delete_entry(name=f"{parent}/entries/{name}")
+            print(f"  Deleted entry: {name}")
+        except Exception:
+            pass
+
+    # 4. Reset local Iceberg catalog
+    if os.path.exists("iceberg_catalog.db"):
+        os.remove("iceberg_catalog.db")
+        print("  Deleted local Iceberg catalog")
+
+    print("✅ Reset complete.")
+
 
 if __name__ == "__main__":
     app()

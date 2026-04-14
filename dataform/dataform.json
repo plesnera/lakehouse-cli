@@ -1,0 +1,7 @@
+{
+  "defaultSchema": "marketing",
+  "assertionSchema": "marketing_assertions",
+  "warehouse": "bigquery",
+  "defaultDatabase": "wpp-dataproducts-lakehouse",
+  "defaultLocation": "us-east1"
+}

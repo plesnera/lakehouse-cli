@@ -53,3 +53,36 @@ Terms related to geospatial and location data.
   - Description: WGS-84 longitude coordinate of an audience segment geographic centroid. Used for regional targeting and location-based insights.
   - Tables: audience
   - Business Context: Geographic targeting
+
+## Category: Marketing Metrics
+
+Terms related to marketing performance measurement and attribution.
+
+- **audience_segment**
+  - Description: A modelled audience cohort characterised by demographics, interests, and behavioural signals. Derived from panel survey data.
+  - Tables: audience
+  - Business Context: Audience discovery and campaign targeting
+
+- **impression**
+  - Related: reach, frequency, cpm
+  - Description: A single instance of an ad being served to a user. Counted via pixel_events where event_type = 'impression'.
+  - Tables: pixel_events
+  - Business Context: Top-of-funnel awareness measurement
+
+- **conversion**
+  - Related: cvr, cpa, roas
+  - Description: A purchase transaction attributed to an ad exposure via cookie_id or hem join within an attribution window.
+  - Tables: transactions, pixel_events
+  - Business Context: Bottom-of-funnel performance measurement
+
+- **roas**
+  - Related: conversion, mer
+  - Description: Return On Ad Spend. Calculated as SUM(transaction amount_usd) / actual_spend_usd. The primary efficiency metric for campaign performance.
+  - Tables: transactions, campaigns, pixel_events
+  - Business Context: Campaign efficiency and budget optimisation
+
+- **ltv**
+  - Related: cac
+  - Description: Lifetime Value. Calculated as SUM(amount_usd) per pan_token over the full transaction history. Used for long-term customer value assessment.
+  - Tables: transactions
+  - Business Context: Long-term customer value and acquisition strategy

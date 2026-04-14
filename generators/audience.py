@@ -41,8 +41,10 @@ class AudienceGenerator(BaseGenerator):
             
             data["lat"].append(lat)
             data["lon"].append(lon)
-            data["location_lat"].append(lat)
-            data["location_lon"].append(lon)
+            # location_lat/location_lon are populated by the orchestrator
+            # via metadata-driven synonym column mappings
+            data["location_lat"].append(None)
+            data["location_lon"].append(None)
             data["region"].append(m_faker.administrative_unit())
             
             # HEM (60% fill rate)
@@ -64,7 +66,8 @@ class AudienceGenerator(BaseGenerator):
         return np.random.choice(possible, size=np.random.randint(1, 5), replace=False).tolist()
 
     def _generate_affinity(self):
-        brands = ["BrandA", "BrandB", "BrandC", "BrandD"]
+        from generators.config import BRANDS
+        brands = BRANDS
         return {b: round(np.random.random(), 3) for b in brands}
 
     def _generate_channel_index(self):

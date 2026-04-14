@@ -33,8 +33,10 @@ class CookieRegistryGenerator(BaseGenerator):
             "last_seen_at": []
         }
 
-        data["visitor_id"] = data["cookie_id"]
-        data["device_id"] = data["cookie_id"]
+        # visitor_id and device_id are populated by the orchestrator
+        # via metadata-driven synonym column mappings (Synonym Of: cookie_id)
+        data["visitor_id"] = [None] * n
+        data["device_id"] = [None] * n
 
         for i in range(n):
             market = data["country_code"][i]
@@ -49,7 +51,7 @@ class CookieRegistryGenerator(BaseGenerator):
                 if audience_hems[idx] is not None and np.random.random() < 0.8:
                     h = audience_hems[idx]
                     data["hem"].append(h)
-                    data["hashed_email"].append(h)
+                    data["hashed_email"].append(None)  # populated by orchestrator synonym mapping
                 else:
                     data["hem"].append(None)
                     data["hashed_email"].append(None)
@@ -59,7 +61,7 @@ class CookieRegistryGenerator(BaseGenerator):
                 if np.random.random() < self.config.cookie_hem_fill_rate and shared_hems:
                     h = np.random.choice(shared_hems)
                     data["hem"].append(h)
-                    data["hashed_email"].append(h)
+                    data["hashed_email"].append(None)  # populated by orchestrator synonym mapping
                 else:
                     data["hem"].append(None)
                     data["hashed_email"].append(None)

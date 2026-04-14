@@ -1,0 +1,56 @@
+config {
+  type: "table",
+  description: "Campaign ROAS (Return On Ad Spend) model. Joins campaigns to transactions via pixel_events cookie_id/hem to compute conversion metrics.",
+  tags: ["marketing", "attribution"]
+}
+
+-- Conversion and ROAS metrics from lakehouse-final.md §1.6
+WITH attributed_conversions AS (
+  SELECT
+    pe.campaign_id,
+    t.txn_id,
+    t.amount_usd,
+    t.pan_token,
+    -- Attribution: transaction linked via cookie_id or hem within 30-day window
+    ROW_NUMBER() OVER (PARTITION BY t.txn_id ORDER BY pe.event_ts DESC) AS rn
+  FROM
+    ${ref("pixel_events")} AS pe
+  INNER JOIN
+    ${ref("transactions")} AS t
+    ON (pe.cookie_id = t.cookie_id OR pe.cookie_id IS NULL)
+    AND t.txn_ts >= pe.event_ts
+    AND t.txn_ts <= TIMESTAMP_ADD(pe.event_ts, INTERVAL 30 DAY)
+  WHERE
+    pe.event_type = 'click'
+    AND pe.cookie_id IS NOT NULL
+    AND t.cookie_id IS NOT NULL
+)
+
+SELECT
+  c.campaign_id,
+  c.campaign_name,
+  c.brand,
+  c.country_code,
+  c.actual_spend_usd,
+
+  -- Conversion metrics
+  COUNT(DISTINCT ac.txn_id) AS conversions,
+  SAFE_DIVIDE(
+    COUNT(DISTINCT ac.txn_id),
+    (SELECT COUNTIF(event_type = 'click') FROM ${ref("pixel_events")} WHERE campaign_id = c.campaign_id)
+  ) * 100 AS cvr,
+  SAFE_DIVIDE(c.actual_spend_usd, COUNT(DISTINCT ac.txn_id)) AS cpa,
+
+  -- Revenue metrics
+  SUM(ac.amount_usd) AS attributed_revenue_usd,
+  SAFE_DIVIDE(SUM(ac.amount_usd), c.actual_spend_usd) AS roas,
+
+  -- New customer metrics (first transactions)
+  COUNT(DISTINCT ac.pan_token) AS unique_customers
+
+FROM
+  ${ref("campaigns")} AS c
+LEFT JOIN
+  attributed_conversions AS ac ON c.campaign_id = ac.campaign_id AND ac.rn = 1
+GROUP BY
+  c.campaign_id, c.campaign_name, c.brand, c.country_code, c.actual_spend_usd

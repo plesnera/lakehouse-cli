@@ -32,31 +32,97 @@ The project uses a **local SQL catalog** (`iceberg_catalog.db`) to manage Iceber
 - Is automatically created/updated during ingestion
 - Can be safely deleted and regenerated if corrupted
 
-### 2. The "Semantic Demo" (Synonyms)
+### 3. The "Semantic Demo" (Synonyms)
 To demonstrate Dataplex's Knowledge Graph capabilities, specific tables contain physical synonym columns with identical values:
 *   **Identity**: `cookie_id` ↔ `visitor_id` ↔ `device_id`
 *   **Contact**: `hem` ↔ `hashed_email`
 *   **Geo**: `lat`/`lon` ↔ `location_lat`/`location_lon`
 *   **Org**: `brand` ↔ `advertiser`
 
-### 3. Dataplex Topology
+### 4. Dataplex Topology
 *   **Lake**: `demo-data` (Region: `us-east1`)
 *   **Zones**:
     *   `raw-data` (RAW): GCS-backed, contains the `pixel_events` Iceberg table.
     *   `curated-data` (CURATED): BigLake/Iceberg-backed, contains enriched marketing tables.
 *   **Governance**: Includes a **Business Glossary** (`marketing-glossary`) and **Tag Templates** (`marketing-table-metadata`).
 
-### 4. Iceberg Catalog Management
+### 5. Iceberg Catalog Management
 The project uses PyIceberg with a **local SQL catalog** for development:
 - **Catalog Type**: SQLite (`iceberg_catalog.db`)
 - **Purpose**: Manages Iceberg table metadata locally before syncing to GCS
 - **Location**: Project root directory
 - **Behavior**: Automatically created on first run, persists table schemas and versions
 
-### 5. Metadata Enrichment
-The platform includes **Google Dataplex-style metadata enrichment** with a clear choice between manual and automated approaches:
+### 6. Markdown-Driven Configuration
 
-### 6. Business Glossary Management
+Almost all metadata in this project is controlled via markdown files — **no code changes are needed** to modify catalog descriptions, tag values, synonym column mappings, or glossary terms. The three markdown-driven systems are:
+
+| System | File(s) | What it controls |
+|--------|---------|------------------|
+| **Table metadata** | `metadata_descriptions/*.md` | Catalog display names, descriptions, Dataplex tag values, column descriptions, synonym column mappings |
+| **Business glossary** | `business_glossaries/glossary.md` | Dataplex glossary terms, synonym links, related-term links, term-to-table definition links |
+| **Column descriptions** | (same as table metadata) | BigQuery column descriptions applied via `enrich-metadata` |
+
+#### Table Metadata File Format (`metadata_descriptions/<table>.md`)
+
+Each table has a markdown file that drives **four concerns** at once:
+
+```markdown
+# Display Name
+
+Description paragraph(s). This becomes the Dataplex catalog entry description.
+
+## Tags
+- business_owner: Marketing Data Products
+- data_domain: audience
+- pii_class: pseudonymous
+- refresh_cadence: daily
+- row_count_approx: 8000
+- marketing_usecases: audience_discovery,audience_performance_prediction
+
+## Columns
+- audience_id: Surrogate primary key (UUID v4).
+- hem: SHA-256 of normalised email. ~60% populated.
+- lat: Centroid latitude of dominant geo cluster.
+- location_lat: Synonym for lat.
+  - Synonym Of: lat
+- location_lon: Synonym for lon.
+  - Synonym Of: lon
+```
+
+**How each section is consumed:**
+*   `# Display Name` → `catalog.py` uses this as the Dataplex entry display name
+*   Description paragraph → `catalog.py` uses this as the entry description
+*   `## Tags` → `tag_writer.py` applies these as the `marketing_table_metadata` aspect fields
+*   `## Columns` → `enrich-metadata` applies these as BigQuery column descriptions
+*   `Synonym Of: <column>` → the orchestrator copies the source column's values into the synonym column at generation time
+
+#### Adding Synonym Columns for a New Table
+
+To add a synonym column pair (e.g. `email_hash` as a synonym of `hem`):
+1.  Add the synonym column to your generator's schema and data dict (with `None` placeholder values)
+2.  Add the column to the metadata markdown with a `Synonym Of:` sub-bullet:
+    ```markdown
+    - email_hash: Alternative name for hashed email.
+      - Synonym Of: hem
+    ```
+3.  The orchestrator will automatically copy `hem` values into `email_hash` at generation time
+4.  Add the synonym relationship to `business_glossaries/glossary.md` so Dataplex creates the link:
+    ```markdown
+    - **hashed_email**
+      - Synonyms: hem, email_hash
+    ```
+
+#### Adding a New Data Source
+
+When integrating a new table into the lakehouse:
+1.  **Create `metadata_descriptions/<table_name>.md`** with the display name, description, `## Tags`, and `## Columns` sections. This single file configures catalog entries, tags, and column descriptions.
+2.  **Write a generator** in `generators/` that produces the base columns. Synonym columns should be included in the schema but left as `None` — the orchestrator fills them from the metadata.
+3.  **Add the table to the orchestrator** (`generators/orchestrator.py`)
+4.  **Add glossary terms** to `business_glossaries/glossary.md` if the table introduces new canonical terms or synonyms
+5.  Run `uv run python -m ingestion.cli generate --local` then `validate --local` to verify
+
+### 7. Business Glossary Management
 Batch create and manage Dataplex business glossaries from markdown files using the dedicated **Dataplex Glossary API** (`BusinessGlossaryServiceClient`).
 
 **Architecture:**
@@ -128,7 +194,7 @@ Terms related to user and device identity resolution.
 
 ---
 
-### 5. Metadata Enrichment
+### 8. Metadata Enrichment (Detail)
 The platform includes **Google Dataplex-style metadata enrichment** with a clear choice between manual and automated approaches:
 
 **Two Distinct Modes:**
@@ -362,3 +428,46 @@ The Lakehouse is designed to be analyzed by AI agents (like GStack/Gemini CLI) e
 *   **Compute**: BigQuery BigLake
 *   **Governance**: Dataplex Catalog, Business Glossary
 *   **Generation**: Python, Faker, PyArrow, NumPy, Pydantic v2
+
+### 📦 Dataclasses Overview
+
+The ingestion module uses Python dataclasses to model metadata structures:
+
+#### Table Metadata (`ingestion/table_metadata.py`)
+- **`ColumnMeta`**: Represents metadata for a single column (name, description, synonym relationships)
+- **`TableMeta`**: Aggregates all metadata for a table (display name, description, tags, columns)
+
+#### Glossary Management (`ingestion/glossary_manager.py`)
+- **`GlossaryTermDef`**: Defines a glossary term with synonyms, related terms, and table associations
+- **`GlossaryCategoryDef`**: Groups related terms into categories (e.g., Identity, Campaign, Geography)
+- **`GlossaryDef`**: Top-level container for the entire glossary structure
+
+These dataclasses provide type-safe parsing and manipulation of markdown-driven configuration files.
+
+### 🏗 Ingestion Classes Overview
+
+The ingestion module contains the following classes that handle data ingestion and metadata management:
+
+#### Data Writing & Registration
+- **`IcebergWriter`** (`ingestion/iceberg_writer.py`): Writes data to Iceberg tables in GCS
+- **`BigLakeRegistrar`** (`ingestion/bq_external.py`): Registers BigLake external tables in BigQuery
+- **`DataplexManager`** (`ingestion/dataplex_lake.py`): Manages Dataplex lake topology and asset registration
+- **`CatalogManager`** (`ingestion/catalog.py`): Creates and manages Dataplex catalog entries
+
+#### Metadata & Governance
+- **`TagWriter`** (`ingestion/tag_writer.py`): Applies Dataplex tags to tables based on markdown metadata
+- **`GlossaryWriter`** (`ingestion/glossary_writer.py`): Legacy wrapper for glossary operations (delegates to BusinessGlossaryManager)
+- **`BusinessGlossaryManager`** (`ingestion/glossary_manager.py`): Manages Dataplex business glossary creation and term linking
+- **`HybridMetadataEnricher`** (`ingestion/bq_metadata_hybrid.py`): Enriches tables with hybrid (manual + automated) metadata
+
+#### Data Quality & Analysis
+- **`DataProfilingManager`** (`ingestion/data_profiling.py`): Creates and runs Dataplex data profiling scans
+- **`DataQualityManager`** (`ingestion/data_quality.py`): Creates and runs Dataplex data quality scans with marketing-specific rules
+
+#### Advanced Features
+- **`VectorSearchManager`** (`ingestion/vector_search.py`): Sets up BigQuery Vector Search with embedding models and indexes
+- **`BQMLGeminiManager`** (`ingestion/bqml_gemini.py`): Manages BigQuery ML Gemini remote model setup and text generation
+- **`ContinuousQueryManager`** (`ingestion/continuous_queries.py`): Sets up BigQuery continuous queries for real-time aggregation
+
+These classes are orchestrated through the CLI (`ingestion/cli.py`) to provide a comprehensive data ingestion and governance pipeline.
+

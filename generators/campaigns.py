@@ -27,12 +27,13 @@ class CampaignGenerator(BaseGenerator):
 
         base_date = date.today() - timedelta(days=self.config.date_range_days)
         
-        brands = ["AeroCorp", "BioGlow", "CloudScale", "DynaMotive", "EcoPure"]
+        from generators.config import BRANDS
+        brands = BRANDS
 
         for i in range(n):
             brand = np.random.choice(brands)
             data["brand"].append(brand)
-            data["advertiser"].append(brand)
+            data["advertiser"].append(None)  # populated by orchestrator synonym mapping
             data["campaign_name"].append(f"{brand} - {data['product_category'][i]} {i}")
             
             # Dates

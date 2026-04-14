@@ -53,7 +53,8 @@ class TransactionGenerator(BaseGenerator):
             m_faker = self.market_fakers[market]
             
             data["merchant_name"].append(m_faker.company())
-            data["brand"].append(np.random.choice(["AeroCorp", "BioGlow", "CloudScale", "DynaMotive", "EcoPure", "Other"]))
+            from generators.config import BRANDS
+            data["brand"].append(np.random.choice(BRANDS + ["Other"]))
             data["currency_code"].append("USD") # Simplified
             data["city"].append(m_faker.city())
             
