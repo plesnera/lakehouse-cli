@@ -1,0 +1,17 @@
+[project]
+name = "lakehouse-content"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "faker",
+    "pyiceberg",
+    "pyarrow",
+    "pydantic>=2.0",
+    "typer",
+    "google-cloud-storage",
+    "google-cloud-bigquery",
+    "google-cloud-dataplex",
+    "numpy",
+    "sqlalchemy",
+
+]
