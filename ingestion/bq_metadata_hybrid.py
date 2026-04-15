@@ -38,164 +38,81 @@ class HybridMetadataEnricher:
         # Ensure markdown directory exists
         os.makedirs(self.markdown_dir, exist_ok=True)
     
-    def generate_descriptions(self, timeout: int = 300):
+    def _generate_descriptions_core(self, table_names: List[str], metadata_files: Optional[List[str]] = None, 
+                                   use_google_insights: bool = True, dry_run: bool = False):
         """
-        Generate hybrid descriptions for all tables in the dataset.
+        Core method for generating descriptions with flexible behavior.
         
         Args:
-            timeout: Maximum time to wait for operations (seconds)
+            table_names: List of table names to process
+            metadata_files: Optional list of metadata file paths
+            use_google_insights: Whether to combine with Google insights
+            dry_run: If True, preview changes without applying them
         """
-        print("Starting hybrid metadata enrichment...")
+        if dry_run:
+            mode_desc = "previewing" if dry_run else "applying"
+            insights_desc = "with Google insights" if use_google_insights else "manual only"
+            print(f"👁️  {mode_desc} metadata enrichment for {len(table_names)} tables ({insights_desc})...")
+        else:
+            print(f"Starting metadata enrichment for {len(table_names)} tables...")
         
-        # List all tables in the dataset
-        tables = self.client.list_tables(self.dataset_id)
-        
-        for table in tables:
-            table_ref = f"{self.dataset_id}.{table.table_id}"
-            print(f"Processing table: {table_ref}")
-            
-            try:
-                # Get current table info
-                table_obj = self.client.get_table(table_ref)
-                
-                # Generate hybrid descriptions
-                table_description, column_descriptions = self._generate_hybrid_descriptions(table_obj)
-                
-                # Update table with descriptions
-                self._update_table_metadata(
-                    table_ref, 
-                    table_description, 
-                    column_descriptions
-                )
-                print(f"✅ Enriched metadata for: {table_ref}")
-                
-            except Exception as e:
-                print(f"⚠️  Failed to enrich {table_ref}: {e}")
-        
-        print("Hybrid metadata enrichment complete!")
-    
-    def generate_descriptions_for_tables(self, table_names: List[str], timeout: int = 300):
-        """
-        Generate hybrid descriptions for specific tables using default markdown files.
-        
-        Args:
-            table_names: List of table names to enrich
-            timeout: Maximum time to wait for operations (seconds)
-        """
-        print(f"Starting selective hybrid metadata enrichment for {len(table_names)} tables...")
-        
-        for table_name in table_names:
-            table_ref = f"{self.dataset_id}.{table_name}"
-            print(f"Processing table: {table_ref}")
-            
-            try:
-                # Get current table info
-                table_obj = self.client.get_table(table_ref)
-                
-                # Generate hybrid descriptions using default markdown file
-                table_description, column_descriptions = self._generate_hybrid_descriptions(table_obj)
-                
-                # Update table with descriptions
-                self._update_table_metadata(
-                    table_ref, 
-                    table_description, 
-                    column_descriptions
-                )
-                print(f"✅ Enriched metadata for: {table_ref}")
-                
-            except NotFound:
-                print(f"⚠️  Table not found: {table_ref}")
-            except Exception as e:
-                print(f"⚠️  Failed to enrich {table_ref}: {e}")
-        
-        print("Manual metadata enrichment complete!")
-    
-    def generate_descriptions_for_tables_with_google_insights(self, table_names: List[str], timeout: int = 300):
-        """
-        Generate descriptions for specific tables using ONLY Google-style automated insights.
-        
-        This method does NOT use manual markdown files - it generates descriptions
-        purely from Google Dataplex-style automated analysis.
-        
-        Args:
-            table_names: List of table names in format project.dataset.table or just table_name
-            timeout: Maximum time to wait for operations (seconds)
-        """
-        print(f"Starting Google insights enrichment for {len(table_names)} tables...")
-        
-        for table_name in table_names:
+        for table_name, metadata_file in zip(table_names, metadata_files or [None]*len(table_names)):
             # Support both full format (project.dataset.table) and short format (table)
             if '.' in table_name and table_name.count('.') >= 2:
-                # Full format: project.dataset.table
                 table_ref = table_name
             else:
-                # Short format: table_name only
                 table_ref = f"{self.dataset_id}.{table_name}"
             
-            print(f"Processing table: {table_ref} (Google insights only)")
+            print(f"Processing table: {table_ref}" + 
+                  (f" with metadata: {metadata_file}" if metadata_file else ""))
             
             try:
-                # Get current table info
                 table_obj = self.client.get_table(table_ref)
                 
-                # Generate descriptions using ONLY Google insights (no manual files)
-                table_description, column_descriptions = self._generate_table_insights(table_ref)
+                # Generate descriptions based on mode
+                if use_google_insights:
+                    if metadata_file:
+                        table_description, column_descriptions = self._generate_hybrid_descriptions_with_file(table_obj, metadata_file)
+                    else:
+                        table_description, column_descriptions = self._generate_hybrid_descriptions(table_obj)
+                else:
+                    table_description, column_descriptions = self._load_manual_descriptions(table_ref, metadata_file)
                 
-                # Update table with descriptions
-                self._update_table_metadata(
-                    table_ref, 
-                    table_description, 
-                    column_descriptions
-                )
-                print(f"✅ Enriched metadata for: {table_ref}")
+                if dry_run:
+                    self._preview_metadata_changes(table_ref, table_description, column_descriptions)
+                else:
+                    self._update_table_metadata(table_ref, table_description, column_descriptions)
+                    print(f"✅ Enriched metadata for: {table_ref}")
                 
             except NotFound:
                 print(f"⚠️  Table not found: {table_ref}")
             except Exception as e:
                 print(f"⚠️  Failed to enrich {table_ref}: {e}")
         
-        print("Google insights enrichment complete!")
+        if dry_run:
+            print("\n👁️  Dry-run complete. No changes were applied.")
+        else:
+            print("Metadata enrichment complete!")
     
-    def generate_descriptions_with_google_insights(self, timeout: int = 300):
-        """
-        Generate descriptions for ALL tables using ONLY Google-style automated insights.
-        
-        This method processes all tables in the dataset using pure Google insights
-        without any manual markdown files.
-        
-        Args:
-            timeout: Maximum time to wait for operations (seconds)
-        """
-        print("Starting Google insights enrichment for all tables...")
-        
-        # List all tables in the dataset
-        tables = self.client.list_tables(self.dataset_id)
-        
-        for table in tables:
-            table_ref = f"{self.dataset_id}.{table.table_id}"
-            print(f"Processing table: {table_ref} (Google insights only)")
-            
-            try:
-                # Get current table info
-                table_obj = self.client.get_table(table_ref)
-                
-                # Generate descriptions using ONLY Google insights (no manual files)
-                table_description, column_descriptions = self._generate_table_insights(table_ref)
-                
-                # Update table with descriptions
-                self._update_table_metadata(
-                    table_ref, 
-                    table_description, 
-                    column_descriptions
-                )
-                print(f"✅ Enriched metadata for: {table_ref}")
-                
-            except Exception as e:
-                print(f"⚠️  Failed to enrich {table_ref}: {e}")
-        
-        print("Google insights enrichment for all tables complete!")
+    def generate_descriptions(self, timeout: int = 300, dry_run: bool = False):
+        """Generate hybrid descriptions for all tables in the dataset."""
+        tables = [table.table_id for table in self.client.list_tables(self.dataset_id)]
+        self._generate_descriptions_core(tables, dry_run=dry_run)
     
-    def generate_descriptions_for_tables_with_files(self, table_names: List[str], metadata_files: List[str], timeout: int = 300):
+    def generate_descriptions_for_tables(self, table_names: List[str], timeout: int = 300, dry_run: bool = False):
+        """Generate hybrid descriptions for specific tables using default markdown files."""
+        self._generate_descriptions_core(table_names, dry_run=dry_run)
+    
+    def generate_descriptions_for_tables_with_google_insights(self, table_names: List[str], timeout: int = 300, dry_run: bool = False):
+        """Generate descriptions using ONLY Google-style automated insights (no manual files)."""
+        self._generate_descriptions_core(table_names, use_google_insights=True, dry_run=dry_run)
+    
+    def generate_descriptions_with_google_insights(self, timeout: int = 300, dry_run: bool = False):
+        """Generate descriptions for ALL tables using ONLY Google-style automated insights."""
+        tables = [table.table_id for table in self.client.list_tables(self.dataset_id)]
+        self._generate_descriptions_core(tables, use_google_insights=True, dry_run=dry_run)
+    
+    def generate_descriptions_for_tables_with_files(self, table_names: List[str], metadata_files: List[str], timeout: int = 300, dry_run: bool = False, use_google_insights: bool = True):
         """
         Generate hybrid descriptions for specific tables using explicit metadata files.
         
@@ -203,8 +120,13 @@ class HybridMetadataEnricher:
             table_names: List of table names in format project.dataset.table or just table_name
             metadata_files: List of metadata file paths to use
             timeout: Maximum time to wait for operations (seconds)
+            dry_run: If True, preview changes without applying them
+            use_google_insights: If True, combine with Google insights (hybrid mode)
         """
-        print(f"Starting manual metadata enrichment for {len(table_names)} tables...")
+        if dry_run:
+            print(f"👁️  Previewing manual metadata enrichment for {len(table_names)} tables (dry-run mode)...")
+        else:
+            print(f"Starting manual metadata enrichment for {len(table_names)} tables...")
         
         for table_name, metadata_file in zip(table_names, metadata_files):
             # Support both full format (project.dataset.table) and short format (table)
@@ -222,23 +144,35 @@ class HybridMetadataEnricher:
                 # Get current table info
                 table_obj = self.client.get_table(table_ref)
                 
-                # Generate hybrid descriptions using explicit metadata file
-                table_description, column_descriptions = self._generate_hybrid_descriptions_with_file(table_obj, metadata_file)
-                
-                # Update table with descriptions
-                self._update_table_metadata(
-                    table_ref, 
-                    table_description, 
-                    column_descriptions
-                )
-                print(f"✅ Enriched metadata for: {table_ref}")
+                # Generate descriptions based on mode
+                if use_google_insights:
+                    # Generate hybrid descriptions using explicit metadata file
+                    table_description, column_descriptions = self._generate_hybrid_descriptions_with_file(table_obj, metadata_file)
+                else:
+                    # Use pure manual descriptions only (no Google insights)
+                    table_description, column_descriptions = self._load_manual_descriptions(table_ref, metadata_file)
+
+                if dry_run:
+                    # Preview changes
+                    self._preview_metadata_changes(table_ref, table_description, column_descriptions)
+                else:
+                    # Update table with descriptions
+                    self._update_table_metadata(
+                        table_ref, 
+                        table_description, 
+                        column_descriptions
+                    )
+                    print(f"✅ Enriched metadata for: {table_ref}")
                 
             except NotFound:
                 print(f"⚠️  Table not found: {table_ref}")
             except Exception as e:
                 print(f"⚠️  Failed to enrich {table_ref}: {e}")
         
-        print("Explicit hybrid metadata enrichment complete!")
+        if dry_run:
+            print("\n👁️  Dry-run complete. No changes were applied.")
+        else:
+            print("Manual metadata enrichment complete!")
     
     def _generate_hybrid_descriptions(self, table_obj) -> Tuple[str, Dict[str, str]]:
         """
@@ -373,13 +307,29 @@ class HybridMetadataEnricher:
                 # Parse markdown content
                 lines = content.split('\n')
                 
-                # Extract table description (first paragraph)
-                if lines:
-                    table_description = lines[0].strip()
-                    if table_description.startswith('# '):
-                        table_description = table_description[2:].strip()
-                    elif table_description.startswith('## '):
-                        table_description = table_description[3:].strip()
+                # Extract table description (first non-header paragraph)
+                table_description = ""
+                in_description = False
+                
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Skip header lines
+                    if line.startswith('# '):
+                        continue
+                    
+                    # Stop at section headers
+                    if line.startswith('## ') or line.startswith('### '):
+                        break
+                    
+                    # Collect description lines
+                    if line:
+                        if table_description:
+                            table_description += " " + line
+                        else:
+                            table_description = line
                 
                 # Extract column descriptions (bullet points)
                 in_columns_section = False
@@ -439,71 +389,6 @@ class HybridMetadataEnricher:
         except Exception as e:
             print(f"⚠️  Failed to generate insights for {table_ref}: {e}")
             return "", {}
-    
-    def _generate_google_table_insights_description(self, table_obj, table_ref: str) -> str:
-        """
-        Generate table description using Google Table Insights approach.
-        
-        This follows the Google Dataplex metadata enrichment pattern:
-        https://docs.cloud.google.com/dataplex/docs/enrich-entries-metadata#add-aspects
-        
-        Args:
-            table_obj: BigQuery Table object
-            table_ref: Full table reference
-            
-        Returns:
-            Generated table description following Google's approach
-        """
-        # Extract table metadata using Google's recommended approach
-        table_id = table_obj.table_id
-        
-        # Get table statistics (Google Table Insights style)
-        row_count = getattr(table_obj, 'num_rows', 'unknown')
-        size_bytes = getattr(table_obj, 'num_bytes', 'unknown')
-        
-        # Format size properly
-        if isinstance(size_bytes, (int, float)) and size_bytes > 0:
-            size_mb = size_bytes / (1024 * 1024)
-            size_str = f"{size_mb:.1f} MB"
-        else:
-            size_str = "unknown size"
-        
-        # Build description following Google's metadata enrichment pattern
-        description = f"BigQuery table containing {row_count} rows ({size_str}). "
-        
-        # Add Dataplex-style metadata aspects
-        description += f"Part of the Lakehouse Content marketing dataset. "
-        
-        # Add table-specific context using Google's approach
-        if 'audience' in table_id:
-            description += "Contains audience segmentation data including demographics, interests, and geographic information. "
-            description += "Used for audience discovery, lookalike modeling, and campaign targeting."
-        elif 'cookie' in table_id or 'visitor' in table_id:
-            description += "Identity mapping table linking device identifiers to audience segments. "
-            description += "Critical for cross-device identity resolution and attribution analysis."
-        elif 'campaign' in table_id:
-            description += "Marketing campaign metadata including budgets, objectives, and timing. "
-            description += "Joins to pixel_events table via campaign_id for performance analysis."
-        elif 'creative' in table_id:
-            description += "Creative asset library with format, theme, and channel metadata. "
-            description += "Linked to campaigns table for creative performance analysis."
-        elif 'pixel' in table_id or 'event' in table_id:
-            description += "Event-level tracking data including impressions, clicks, and video engagement. "
-            description += "Partitioned by date for time-series analysis and performance reporting."
-        elif 'transaction' in table_id:
-            description += "Purchase transaction feed with Mastercard-style data. "
-            description += "Used for ROAS calculation, LTV analysis, and attribution modeling."
-        else:
-            description += "Marketing data table supporting semantic discovery and AI-powered analysis."
-        
-        # Add partitioning info (Google-style)
-        if table_obj.time_partitioning:
-            description += f" Time-partitioned by {table_obj.time_partitioning.type} for optimized query performance."
-        
-        # Add Dataplex integration note
-        description += " Registered in Dataplex Knowledge Graph for semantic data discovery."
-        
-        return description
     
     def _generate_google_column_insights(self, table_obj) -> Dict[str, str]:
         """
@@ -628,6 +513,71 @@ class HybridMetadataEnricher:
         
         return descriptions
     
+    def _generate_google_table_insights_description(self, table_obj, table_ref: str) -> str:
+        """
+        Generate table description using Google Table Insights approach.
+        
+        This follows the Google Dataplex metadata enrichment pattern:
+        https://docs.cloud.google.com/dataplex/docs/enrich-entries-metadata#add-aspects
+        
+        Args:
+            table_obj: BigQuery Table object
+            table_ref: Full table reference
+            
+        Returns:
+            Generated table description following Google's approach
+        """
+        # Extract table metadata using Google's recommended approach
+        table_id = table_obj.table_id
+        
+        # Get table statistics (Google Table Insights style)
+        row_count = getattr(table_obj, 'num_rows', 'unknown')
+        size_bytes = getattr(table_obj, 'num_bytes', 'unknown')
+        
+        # Format size properly
+        if isinstance(size_bytes, (int, float)) and size_bytes > 0:
+            size_mb = size_bytes / (1024 * 1024)
+            size_str = f"{size_mb:.1f} MB"
+        else:
+            size_str = "unknown size"
+        
+        # Build description following Google's metadata enrichment pattern
+        description = f"BigQuery table containing {row_count} rows ({size_str}). "
+        
+        # Add Dataplex-style metadata aspects
+        description += f"Part of the Lakehouse Content marketing dataset. "
+        
+        # Add table-specific context using Google's approach
+        if 'audience' in table_id:
+            description += "Contains audience segmentation data including demographics, interests, and geographic information. "
+            description += "Used for audience discovery, lookalike modeling, and campaign targeting."
+        elif 'cookie' in table_id or 'visitor' in table_id:
+            description += "Identity mapping table linking device identifiers to audience segments. "
+            description += "Critical for cross-device identity resolution and attribution analysis."
+        elif 'campaign' in table_id:
+            description += "Marketing campaign metadata including budgets, objectives, and timing. "
+            description += "Joins to pixel_events table via campaign_id for performance analysis."
+        elif 'creative' in table_id:
+            description += "Creative asset library with format, theme, and channel metadata. "
+            description += "Linked to campaigns table for creative performance analysis."
+        elif 'pixel' in table_id or 'event' in table_id:
+            description += "Event-level tracking data including impressions, clicks, and video engagement. "
+            description += "Partitioned by date for time-series analysis and performance reporting."
+        elif 'transaction' in table_id:
+            description += "Purchase transaction feed with Mastercard-style data. "
+            description += "Used for ROAS calculation, LTV analysis, and attribution modeling."
+        else:
+            description += "Marketing data table supporting semantic discovery and AI-powered analysis."
+        
+        # Add partitioning info (Google-style)
+        if table_obj.time_partitioning:
+            description += f" Time-partitioned by {table_obj.time_partitioning.type} for optimized query performance."
+        
+        # Add Dataplex integration note
+        description += " Registered in Dataplex Knowledge Graph for semantic data discovery."
+        
+        return description
+    
     def _combine_descriptions(self, manual_desc: str, insights_desc: str, is_table: bool) -> str:
         """
         Intelligently combine manual and insights descriptions.
@@ -654,6 +604,37 @@ class HybridMetadataEnricher:
             combined = insights_desc
         
         return combined.strip()
+    
+    def _preview_metadata_changes(self, table_ref: str, table_description: str, column_descriptions: dict):
+        """
+        Preview metadata changes without applying them.
+        
+        Args:
+            table_ref: Full table reference
+            table_description: Description for the table
+            column_descriptions: Dictionary of column descriptions
+        """
+        try:
+            table = self.client.get_table(table_ref)
+            
+            print(f"\n📋 Preview for table: {table_ref}")
+            print(f"\n📝 Table Description:")
+            print(f"   {table_description}")
+            
+            print(f"\n📊 Column Descriptions:")
+            for field in table.schema:
+                current_desc = field.description or "(no description)"
+                new_desc = column_descriptions.get(field.name, "(no description)")
+                
+                if new_desc != current_desc:
+                    print(f"   • {field.name}: {new_desc}")
+                    if current_desc != "(no description)":
+                        print(f"     (was: {current_desc})")
+                else:
+                    print(f"   • {field.name}: {new_desc} (unchanged)")
+            
+        except Exception as e:
+            print(f"  ❌ Failed to preview metadata for {table_ref}: {e}")
     
     def _update_table_metadata(self, table_ref: str, table_description: str, column_descriptions: dict):
         """

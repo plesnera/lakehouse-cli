@@ -23,9 +23,18 @@ app = typer.Typer()
 def generate(
     local: bool = False,
     full_scale: bool = typer.Option(False, "--full-scale", help="Use production-scale row counts from Agent.md (8K audience, 80K cookies, 2M events, etc.)"),
+    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
+    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
 ):
     from generators.config import FULL_SCALE
     config = GeneratorConfig(**FULL_SCALE) if full_scale else GeneratorConfig()
+    
+    # Apply cross-project configuration if provided
+    if data_project:
+        config.data_project_id = data_project
+    if iceberg_warehouse:
+        config.iceberg_warehouse = iceberg_warehouse
+    
     orchestrator = Orchestrator(config)
     
     if local:
@@ -43,8 +52,27 @@ def generate(
         writer.write_stream(orchestrator.generate_all_streamed())
 
 @app.command()
-def catalog():
+def catalog(
+    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
+    catalog_project: str = typer.Option(None, "--catalog-project", help="GCP project where Dataplex catalog resides"),
+    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
+    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template")
+):
+    """Register Iceberg tables in BigQuery and Dataplex catalog.
+    
+    Supports cross-project scenarios where data and catalog reside in different projects.
+    """
     config = GeneratorConfig()
+    
+    # Apply cross-project configuration if provided
+    if data_project:
+        config.data_project_id = data_project
+    if catalog_project:
+        config.catalog_project_id = catalog_project
+    if iceberg_warehouse:
+        config.iceberg_warehouse = iceberg_warehouse
+    if biglake_connection:
+        config.biglake_connection = biglake_connection
     
     # 1. BQ Registration (Ensures dataset exists)
     bq = BigLakeRegistrar(config)
@@ -77,7 +105,8 @@ def catalog():
 def enrich_metadata(
     table_names: str = typer.Option(None, help="Comma-separated list of table names in format project_id.dataset_id.table_id (e.g., 'wpp-dataproducts-lakehouse.marketing.audience')"),
     metadata_files: str = typer.Option(None, help="Comma-separated list of metadata files to use (e.g., 'audience.md,campaigns.md'). Must match table_names in order"),
-    google_insights: bool = typer.Option(False, help="Use Google-style automated insights instead of manual markdown files")
+    google_insights: bool = typer.Option(False, help="Use Google-style automated insights instead of manual markdown files"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview metadata changes without applying them to BigQuery")
 ):
     """
     Generate and apply table/column descriptions using hybrid or Google-only approach.
@@ -105,6 +134,10 @@ def enrich_metadata(
         # Enrich all tables with pure Google insights
         uv run python -m ingestion.cli enrich-metadata --google-insights
         
+        # Preview changes without applying (dry-run mode)
+        uv run python -m ingestion.cli enrich-metadata --dry-run
+        uv run python -m ingestion.cli enrich-metadata --table-names campaigns --google-insights --dry-run
+        
         # Create markdown templates for manual descriptions
         uv run python -m ingestion.cli create-templates
     """
@@ -122,7 +155,7 @@ def enrich_metadata(
                 print(f"  {table} (Google insights)")
             
             # Use Google insights only (no manual files)
-            enricher.generate_descriptions_for_tables_with_google_insights(tables_to_enrich, timeout=300)
+            enricher.generate_descriptions_for_tables_with_google_insights(tables_to_enrich, timeout=300, dry_run=dry_run)
         else:
             # Validate that metadata files are provided when table names are specified
             if not metadata_files:
@@ -143,14 +176,14 @@ def enrich_metadata(
                 print(f"  {table} <- {metadata_file}")
             
             # Use the explicit metadata files
-            enricher.generate_descriptions_for_tables_with_files(tables_to_enrich, metadata_files_list, timeout=300)
+            enricher.generate_descriptions_for_tables_with_files(tables_to_enrich, metadata_files_list, timeout=300, dry_run=dry_run, use_google_insights=False)
     else:
         if google_insights:
             print("Enriching metadata for all tables using Google insights...")
-            enricher.generate_descriptions_with_google_insights(timeout=300)
+            enricher.generate_descriptions_with_google_insights(timeout=300, dry_run=dry_run)
         else:
             print("Enriching metadata for all tables in dataset (using default markdown files)...")
-            enricher.generate_descriptions(timeout=300)
+            enricher.generate_descriptions(timeout=300, dry_run=dry_run)
 
 @app.command()
 def create_templates():

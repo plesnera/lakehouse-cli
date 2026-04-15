@@ -8,7 +8,7 @@ class DataplexManager:
         self.client = dataplex_v1.DataplexServiceClient()
 
     def ensure_topology(self):
-        parent = f"projects/{self.config.project_id}/locations/{self.config.location}"
+        parent = f"projects/{self.config.catalog_project_id}/locations/{self.config.location}"
         lake_id = "demo-data"
         lake_path = f"{parent}/lakes/{lake_id}"
 

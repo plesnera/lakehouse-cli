@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Dict, List
+import subprocess
+import os
 
 class MarketMatchRates(BaseModel):
     txn_cookie_fill_rate: float
@@ -23,6 +25,25 @@ BRANDS = ["Lucky Cola", "Force Automotive", "AEKI Living"]
 class GeneratorConfig(BaseModel):
     seed: int = 42
     target_markets: List[str] = ["US", "GB", "JP"]
+
+    @staticmethod
+    def get_current_gcloud_project() -> str:
+        """Get the current gcloud project or return None if not available."""
+        try:
+            # Try gcloud command first
+            result = subprocess.run(
+                ["gcloud", "config", "get-value", "project"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            pass
+        
+        # Fallback to environment variable
+        return os.environ.get("GOOGLE_CLOUD_PROJECT", "wpp-dataproducts-lakehouse")
 
     # Scale — dev defaults for fast iteration; use FULL_SCALE for demo
     n_audience_participants: int = 100
@@ -50,9 +71,34 @@ class GeneratorConfig(BaseModel):
         "JP": MarketMatchRates(txn_cookie_fill_rate=0.15, txn_hem_fill_rate=0.10),
     }
 
-    # Iceberg / GCS output
-    iceberg_warehouse: str = "gs://wpp-dataproducts-lakehouse-warehouse/iceberg"
+    # Project configuration - supports cross-project scenarios
+    data_project_id: str = Field(
+        default_factory=lambda: GeneratorConfig.get_current_gcloud_project(),
+        description="GCP project where data is stored (GCS, Iceberg)"
+    )
+    catalog_project_id: str = Field(
+        default_factory=lambda: GeneratorConfig.get_current_gcloud_project(), 
+        description="GCP project where Dataplex catalog resides"
+    )
+
+    # Storage configuration
+    iceberg_warehouse: str = Field(
+        default_factory=lambda: f"gs://{GeneratorConfig.get_current_gcloud_project().replace('-', '')}-warehouse/iceberg",
+        description="GCS path for Iceberg data (can be different project)"
+    )
     iceberg_namespace: str = "marketing"
-    biglake_connection: str = "projects/wpp-dataproducts-lakehouse/locations/us-east1/connections/biglake-conn"
-    project_id: str = "wpp-dataproducts-lakehouse"
+    
+    # Connection configuration - template with project placeholder
+    biglake_connection: str = Field(
+        default="projects/{project_id}/locations/{location}/connections/biglake-conn",
+        description="BigLake connection template with {project_id} placeholder"
+    )
+    
+    # Location configuration
     location: str = "us-east1"
+    
+    # Backward compatibility property
+    @property
+    def project_id(self) -> str:
+        """Maintain backward compatibility - defaults to catalog_project_id"""
+        return self.catalog_project_id

@@ -4,10 +4,10 @@ from generators.config import GeneratorConfig
 class BigLakeRegistrar:
     def __init__(self, config: GeneratorConfig):
         self.config = config
-        self.client = bigquery.Client(project=config.project_id)
+        self.client = bigquery.Client(project=config.catalog_project_id)
 
     def register_tables(self):
-        dataset_id = f"{self.config.project_id}.{self.config.iceberg_namespace}"
+        dataset_id = f"{self.config.catalog_project_id}.{self.config.iceberg_namespace}"
         
         # Ensure dataset exists
         try:
@@ -21,7 +21,8 @@ class BigLakeRegistrar:
         tables = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
         
         from google.cloud import storage
-        storage_client = storage.Client(project=self.config.project_id)
+        # Use data project for storage access (supports cross-project)
+        storage_client = storage.Client(project=self.config.data_project_id)
         bucket_name = self.config.iceberg_warehouse.replace("gs://", "").split("/")[0]
         bucket = storage_client.bucket(bucket_name)
 
@@ -44,8 +45,12 @@ class BigLakeRegistrar:
             
             print(f"Using metadata URI for {name}: {metadata_uri}")
 
-            # Connection ID format for BigLake
-            connection_id = f"{self.config.project_id}.{self.config.location}.biglake-conn"
+            # Connection ID format for BigLake - use catalog project and handle template
+            if "{project_id}" in self.config.biglake_connection:
+                connection_id = self.config.biglake_connection.replace("{project_id}", self.config.catalog_project_id).replace("{location}", self.config.location)
+            else:
+                # Backward compatibility for non-template format
+                connection_id = f"{self.config.catalog_project_id}.{self.config.location}.biglake-conn"
             
             external_config = bigquery.ExternalConfig("ICEBERG")
             external_config.source_uris = [metadata_uri]

@@ -12,7 +12,7 @@ class TagWriter:
         self.client = dataplex_v1.CatalogServiceClient()
 
     def ensure_tag_template(self):
-        parent = f"projects/{self.config.project_id}/locations/{self.config.location}"
+        parent = f"projects/{self.config.catalog_project_id}/locations/{self.config.location}"
         aspect_type_id = "marketing-table-metadata"
         aspect_type_path = f"{parent}/aspectTypes/{aspect_type_id}"
 
