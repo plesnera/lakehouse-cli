@@ -4,8 +4,9 @@
     <exclude-output />
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/local_output" />
     </content>
-    <orderEntry type="jdk" jdkName="uv (lakehouse-content)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="uv (lakehouse-demo)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

@@ -1,5 +1,6 @@
 """
 Business Glossary Manager — Dataplex Glossary REST API client.
+https://docs.cloud.google.com/dataplex/docs/manage-glossaries
 
 Parses a markdown glossary definition file and upserts:
   • Glossary          → POST /v1/.../glossaries
@@ -206,6 +207,20 @@ class BusinessGlossaryManager:
         self.glossary_client = dataplex_v1.BusinessGlossaryServiceClient()
         self.catalog_client = dataplex_v1.CatalogServiceClient()
         self.parent = f"projects/{config.project_id}/locations/{config.location}"
+        self.project_number = self._get_project_number(config.project_id)
+
+    def _get_project_number(self, project_id: str) -> str:
+        """Fetches the GCP project number for a given project ID."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["gcloud", "projects", "describe", project_id, "--format=value(projectNumber)"],
+                capture_output=True, text=True, check=True
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"  🚨 Error fetching project number for '{project_id}': {e}")
+            raise
 
     # ------------------------------------------------------------------
     # Public API
@@ -227,6 +242,28 @@ class BusinessGlossaryManager:
             self._print_dry_run(glossary_def)
             return
 
+        # Pre-pass to ensure all synonym and related terms exist as actual terms
+        all_term_defs_by_slug = {term.name: term for category in glossary_def.categories for term in category.terms}
+        for cat_def in list(glossary_def.categories):
+            for term_def in list(cat_def.terms):
+                def ensure_term_def_exists(link_name, link_type):
+                    link_slug = _slugify(link_name)
+                    if link_slug not in all_term_defs_by_slug:
+                        print(f"  ℹ️  Creating implicit term for {link_type}: {link_name}")
+                        new_term_def = GlossaryTermDef(
+                            name=link_slug,
+                            display_name=link_name,
+                            description=f"{link_type.capitalize()} of {term_def.display_name}"
+                        )
+                        cat_def.terms.append(new_term_def)
+                        all_term_defs_by_slug[link_slug] = new_term_def
+
+                for syn_name in term_def.synonyms:
+                    ensure_term_def_exists(syn_name, "synonym")
+                
+                for rel_name in term_def.related:
+                    ensure_term_def_exists(rel_name, "related term")
+
         # 1. Upsert glossary
         glossary_name = self._upsert_glossary(glossary_def)
 
@@ -244,11 +281,10 @@ class BusinessGlossaryManager:
                 term_resource = self._upsert_term(glossary_name, cat_resource, term_def)
                 term_names[term_def.name] = term_resource
 
-        # 4. Create synonym links
-        self._create_synonym_links(glossary_def, glossary_name, term_names)
+        # 4. Update terms with links (second pass)
+        self._update_term_links(glossary_def, term_names)
 
-        # 5. Create related-term links
-        self._create_related_links(glossary_def, glossary_name, term_names)
+        
 
         print("✅ Glossary creation complete.")
 
@@ -464,11 +500,9 @@ class BusinessGlossaryManager:
             parent=glossary_name,
         )
         result = self.glossary_client.create_glossary_category(
-            request=dataplex_v1.CreateGlossaryCategoryRequest(
-                parent=glossary_name,
-                glossary_category_id=cat_def.name,
-                glossary_category=category,
-            )
+            parent=glossary_name,
+            category=category,
+            category_id=cat_def.name,
         )
         print(f"  ✅ Created category: {cat_def.display_name}")
         return result.name
@@ -498,133 +532,85 @@ class BusinessGlossaryManager:
         result = self.glossary_client.create_glossary_term(
             request=dataplex_v1.CreateGlossaryTermRequest(
                 parent=glossary_name,
-                glossary_term_id=term_def.name,
-                glossary_term=term,
+                term_id=term_def.name,
+                term=term,
             )
         )
         print(f"    ✅ Created term: {term_def.display_name}")
         return result.name
 
-    # ------------------------------------------------------------------
-    # Private helpers — synonym & related links
-    # ------------------------------------------------------------------
-
-    def _create_synonym_links(
-        self,
-        glossary_def: GlossaryDef,
-        glossary_name: str,
-        term_names: Dict[str, str],
-    ) -> None:
-        """Create synonym entryLinks between a canonical term and each of its synonym terms.
-
-        Each synonym is created as its own term in the glossary (if not already
-        present), then linked via ``entry_link_type/synonym``.
-        """
-        entry_group = f"{self.parent}/entryGroups/@dataplex"
+    def _update_term_links(self, glossary_def: GlossaryDef, term_names: Dict[str, str]) -> None:
+        """Second pass to update terms with synonym and related term links."""
+        auth_token = self._get_auth_token()
+        if not auth_token:
+            return
 
         for cat_def in glossary_def.categories:
             for term_def in cat_def.terms:
-                canonical_resource = term_names.get(term_def.name)
-                if not canonical_resource:
-                    continue
+                # Link Synonyms
+                self._create_links_rest(term_def, term_def.synonyms, "synonym", term_names, glossary_def.glossary_id, auth_token)
 
-                for syn_name in term_def.synonyms:
-                    syn_slug = _slugify(syn_name)
+                # Link Related Terms
+                self._create_links_rest(term_def, term_def.related, "related", term_names, glossary_def.glossary_id, auth_token)
 
-                    # Ensure the synonym exists as its own term
-                    if syn_slug not in term_names:
-                        syn_term = GlossaryTermDef(
-                            name=syn_slug,
-                            display_name=syn_name,
-                            description=f"Synonym for {term_def.display_name}. {term_def.description}",
-                        )
-                        cat_resource = f"{glossary_name}/categories/{cat_def.name}"
-                        syn_resource = self._upsert_term(glossary_name, cat_resource, syn_term)
-                        term_names[syn_slug] = syn_resource
-                    syn_resource = term_names[syn_slug]
+    def _create_links_rest(self, term_def: GlossaryTermDef, linked_term_names: List[str], link_type: str, term_names: Dict[str, str], glossary_id: str, auth_token: str):
+        """Helper to create entry links for a term using REST."""
+        import requests
+        
+        canonical_slug = term_def.name
+        canonical_resource_entry = f"projects/{self.project_number}/locations/{self.config.location}/entryGroups/@dataplex/entries/projects/{self.project_number}/locations/{self.config.location}/glossaries/{glossary_id}/terms/{canonical_slug}"
 
-                    # Create the synonym link
-                    link_id = f"syn-{term_def.name}-{syn_slug}"
-                    try:
-                        entry_link = dataplex_v1.EntryLink(
-                            entry_link_type="projects/dataplex-types/locations/global/entryLinkTypes/synonym",
-                            entry_references=[
-                                dataplex_v1.EntryLink.EntryReference(
-                                    name=canonical_resource,
-                                ),
-                                dataplex_v1.EntryLink.EntryReference(
-                                    name=syn_resource,
-                                ),
-                            ],
-                        )
-                        self.catalog_client.create_entry_link(
-                            request=dataplex_v1.CreateEntryLinkRequest(
-                                parent=entry_group,
-                                entry_link_id=link_id,
-                                entry_link=entry_link,
-                            )
-                        )
-                        print(f"    🔗 Synonym link: {term_def.display_name} ↔ {syn_name}")
-                    except AlreadyExists:
-                        print(f"    ↔️  Synonym link exists: {term_def.display_name} ↔ {syn_name}")
-                    except Exception as e:
-                        print(f"    ⚠️  Failed synonym link {term_def.display_name} ↔ {syn_name}: {e}")
+        for link_name in linked_term_names:
+            link_slug = _slugify(link_name)
+            if not link_slug in term_names:
+                print(f"  ⚠️  Could not find resource for linked term '{link_name}', skipping.")
+                continue
 
-    def _create_related_links(
-        self,
-        glossary_def: GlossaryDef,
-        glossary_name: str,
-        term_names: Dict[str, str],
-    ) -> None:
-        """Create related-term entryLinks for terms with a ``Related:`` field."""
-        entry_group = f"{self.parent}/entryGroups/@dataplex"
+            linked_term_entry = f"projects/{self.project_number}/locations/{self.config.location}/entryGroups/@dataplex/entries/projects/{self.project_number}/locations/{self.config.location}/glossaries/{glossary_id}/terms/{link_slug}"
+            
+            id_parts = sorted([canonical_slug, link_slug])
+            entry_link_id = f"{link_type}-{id_parts[0]}-{id_parts[1]}"
 
-        for cat_def in glossary_def.categories:
-            for term_def in cat_def.terms:
-                canonical_resource = term_names.get(term_def.name)
-                if not canonical_resource or not term_def.related:
-                    continue
+            url = f"https://dataplex.googleapis.com/v1/projects/{self.config.project_id}/locations/{self.config.location}/entryGroups/@dataplex/entryLinks?entry_link_id={entry_link_id}"
+            
+            headers = {
+                "Authorization": f"Bearer {auth_token}",
+                "Content-Type": "application/json",
+            }
 
-                for rel_name in term_def.related:
-                    rel_slug = _slugify(rel_name)
-                    rel_resource = term_names.get(rel_slug)
+            payload = {
+                "entry_link_type": f"projects/dataplex-types/locations/global/entryLinkTypes/{link_type}",
+                "entry_references": [
+                    {"name": canonical_resource_entry},
+                    {"name": linked_term_entry},
+                ],
+            }
 
-                    if not rel_resource:
-                        # Create the related term if it doesn't exist yet
-                        rel_term = GlossaryTermDef(
-                            name=rel_slug,
-                            display_name=rel_name,
-                            description=f"Related to {term_def.display_name}.",
-                        )
-                        cat_resource = f"{glossary_name}/categories/{cat_def.name}"
-                        rel_resource = self._upsert_term(glossary_name, cat_resource, rel_term)
-                        term_names[rel_slug] = rel_resource
+            try:
+                response = requests.post(url, headers=headers, json=payload)
+                if response.status_code == 409: # AlreadyExists
+                    print(f"  ↔️  Link already exists: {term_def.display_name} ↔ {link_name}")
+                elif response.status_code == 200:
+                    print(f"  🔗 Linked {term_def.display_name} → {link_name} (as {link_type})")
+                else:
+                    print(f"  ⚠️  Failed to link {term_def.display_name} → {link_name}: {response.status_code} {response.text}")
+            except Exception as e:
+                print(f"  ⚠️  Failed to link {term_def.display_name} → {link_name}: {e}")
 
-                    link_id = f"rel-{term_def.name}-{rel_slug}"
-                    try:
-                        entry_link = dataplex_v1.EntryLink(
-                            entry_link_type="projects/dataplex-types/locations/global/entryLinkTypes/related",
-                            entry_references=[
-                                dataplex_v1.EntryLink.EntryReference(
-                                    name=canonical_resource,
-                                ),
-                                dataplex_v1.EntryLink.EntryReference(
-                                    name=rel_resource,
-                                ),
-                            ],
-                        )
-                        self.catalog_client.create_entry_link(
-                            request=dataplex_v1.CreateEntryLinkRequest(
-                                parent=entry_group,
-                                entry_link_id=link_id,
-                                entry_link=entry_link,
-                            )
-                        )
-                        print(f"    🔗 Related link: {term_def.display_name} ↔ {rel_name}")
-                    except AlreadyExists:
-                        print(f"    ↔️  Related link exists: {term_def.display_name} ↔ {rel_name}")
-                    except Exception as e:
-                        print(f"    ⚠️  Failed related link {term_def.display_name} ↔ {rel_name}: {e}")
+    def _get_auth_token(self) -> Optional[str]:
+        """Fetches the GCP auth token from gcloud."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["gcloud", "auth", "print-access-token"],
+                capture_output=True, text=True, check=True
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"  🚨 Error fetching auth token: {e}")
+            return None
+
+    
 
     # ------------------------------------------------------------------
     # Private helpers — misc

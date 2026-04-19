@@ -1,5 +1,6 @@
 import pyarrow as pa
 from pyiceberg.catalog import load_catalog
+from pyiceberg.exceptions import NoSuchTableError, TableAlreadyExistsError
 from generators.config import GeneratorConfig
 from typing import Dict, Generator, Tuple
 import os
@@ -27,11 +28,9 @@ class IcebergWriter:
             identifier = f"{namespace}.{name}"
             
             # Ensure namespace exists
-            try:
+            if (namespace,) not in self.catalog.list_namespaces():
                 self.catalog.create_namespace(namespace)
                 print(f"Created Iceberg namespace: {namespace}")
-            except Exception:
-                pass # Already exists
             
             if name not in tables_created:
                 # Try to load, if fails, create
@@ -40,7 +39,7 @@ class IcebergWriter:
                     print(f"Appending to existing Iceberg table: {identifier}")
                     ice_table.append(table)
                     tables_created.add(name)
-                except Exception:
+                except NoSuchTableError:
                     print(f"Creating new Iceberg table: {identifier}")
                     from pyiceberg.io.pyarrow import _pyarrow_to_schema_without_ids
                     from pyiceberg.schema import assign_fresh_schema_ids
@@ -48,29 +47,33 @@ class IcebergWriter:
                     ice_schema = _pyarrow_to_schema_without_ids(table.schema)
                     ice_schema = assign_fresh_schema_ids(ice_schema)
                     
-                    if name in ["pixel_events", "transactions"]:
-                        from pyiceberg.partitioning import PartitionSpec, PartitionField
-                        from pyiceberg.transforms import IdentityTransform
-                        
-                        source_id = ice_schema.find_field("partition_date").field_id
-                        spec = PartitionSpec(
-                            PartitionField(
-                                source_id=source_id,
-                                field_id=1000,
-                                transform=IdentityTransform(),
-                                name="partition_date"
+                    try:
+                        if name in ["pixel_events", "transactions"]:
+                            from pyiceberg.partitioning import PartitionSpec, PartitionField
+                            from pyiceberg.transforms import IdentityTransform
+                            
+                            source_id = ice_schema.find_field("partition_date").field_id
+                            spec = PartitionSpec(
+                                PartitionField(
+                                    source_id=source_id,
+                                    field_id=1000,
+                                    transform=IdentityTransform(),
+                                    name="partition_date"
+                                )
                             )
-                        )
-                        self.catalog.create_table(
-                            identifier=identifier,
-                            schema=ice_schema,
-                            partition_spec=spec
-                        ).append(table)
-                    else:
-                        self.catalog.create_table(
-                            identifier=identifier,
-                            schema=ice_schema
-                        ).append(table)
+                            self.catalog.create_table(
+                                identifier=identifier,
+                                schema=ice_schema,
+                                partition_spec=spec
+                            ).append(table)
+                        else:
+                            self.catalog.create_table(
+                                identifier=identifier,
+                                schema=ice_schema
+                            ).append(table)
+                    except TableAlreadyExistsError:
+                        print(f"Table {identifier} already exists, appending data.")
+                        self.catalog.load_table(identifier).append(table)
                     tables_created.add(name)
             else:
                 # Table already created in this run, just append

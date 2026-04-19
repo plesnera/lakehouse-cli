@@ -8,7 +8,7 @@ class PixelEventGenerator(BaseGenerator):
     def generate(self, **kwargs) -> pa.Table:
         return next(self.generate_batches(self.config.n_pixel_events, **kwargs))
 
-    def generate_batches(self, batch_size: int = 100000, **kwargs):
+    def generate_batches(self, batch_size: int = 1000, **kwargs):
         n_total = self.config.n_pixel_events
         n_generated = 0
         

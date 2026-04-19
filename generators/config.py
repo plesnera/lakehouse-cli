@@ -9,13 +9,13 @@ class MarketMatchRates(BaseModel):
 
 # Production-scale defaults matching Agent.md spec
 FULL_SCALE = {
-    "n_audience_participants": 8_000,
-    "n_audience_segments": 500,
-    "n_cookies": 80_000,
-    "n_campaigns": 200,
-    "n_creatives_per_campaign": 5,
-    "n_pixel_events": 2_000_000,
-    "n_transactions": 500_000,
+    "n_audience_participants": 1000, #8_000,
+    "n_audience_segments":   65, #500,
+    "n_cookies":  1000, #80_000,
+    "n_campaigns": 25,  #200,
+    "n_creatives_per_campaign": 1, # 5,
+    "n_pixel_events": 2000, #2_000_000,
+    "n_transactions": 500, #500_000,
 }
 
 # Fictional brands from Agent.md
@@ -83,7 +83,7 @@ class GeneratorConfig(BaseModel):
 
     # Storage configuration
     iceberg_warehouse: str = Field(
-        default_factory=lambda: f"gs://{GeneratorConfig.get_current_gcloud_project().replace('-', '')}-warehouse/iceberg",
+        default_factory=lambda: f"gs://{GeneratorConfig.get_current_gcloud_project()}-warehouse/iceberg",
         description="GCS path for Iceberg data (can be different project)"
     )
     iceberg_namespace: str = "marketing"

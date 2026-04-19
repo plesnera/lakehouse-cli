@@ -21,7 +21,7 @@ app = typer.Typer()
 
 @app.command()
 def generate(
-    local: bool = False,
+    local: bool = True,
     full_scale: bool = typer.Option(False, "--full-scale", help="Use production-scale row counts from Agent.md (8K audience, 80K cookies, 2M events, etc.)"),
     data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
     iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
@@ -51,6 +51,36 @@ def generate(
         writer = IcebergWriter(config)
         writer.write_stream(orchestrator.generate_all_streamed())
 
+def _run_catalog(config: GeneratorConfig):
+    """Internal helper to run the full cataloging process."""
+    # 1. BQ Registration (Ensures dataset exists)
+    bq = BigLakeRegistrar(config)
+    bq.register_tables()
+
+    # 2. Dataplex Lake Topology
+    dp = DataplexManager(config)
+    dp.ensure_topology()
+    dp.register_assets()
+
+    # 3. Catalog Entries
+    cat = CatalogManager(config)
+    cat.ensure_entry_group()
+    cat.register_entries()
+
+    # 4. Tags
+    tag = TagWriter(config)
+    tag.ensure_tag_template()
+    tag.apply_tags()
+
+    # 5. Glossary
+    gloss = GlossaryWriter(config)
+    gloss.create_glossary()
+    gloss.create_terms()
+
+    # 6. Metadata Enrichment (Optional - can be time-consuming)
+    print("Note: Run 'uv run python -m ingestion.cli enrich-metadata' to add table/column descriptions")
+
+
 @app.command()
 def catalog(
     data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
@@ -59,11 +89,11 @@ def catalog(
     biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template")
 ):
     """Register Iceberg tables in BigQuery and Dataplex catalog.
-    
+
     Supports cross-project scenarios where data and catalog reside in different projects.
     """
     config = GeneratorConfig()
-    
+
     # Apply cross-project configuration if provided
     if data_project:
         config.data_project_id = data_project
@@ -73,33 +103,8 @@ def catalog(
         config.iceberg_warehouse = iceberg_warehouse
     if biglake_connection:
         config.biglake_connection = biglake_connection
-    
-    # 1. BQ Registration (Ensures dataset exists)
-    bq = BigLakeRegistrar(config)
-    bq.register_tables()
-    
-    # 2. Dataplex Lake Topology
-    dp = DataplexManager(config)
-    dp.ensure_topology()
-    dp.register_assets()
-    
-    # 3. Catalog Entries
-    cat = CatalogManager(config)
-    cat.ensure_entry_group()
-    cat.register_entries()
-    
-    # 4. Tags
-    tag = TagWriter(config)
-    tag.ensure_tag_template()
-    tag.apply_tags()
-    
-    # 5. Glossary
-    gloss = GlossaryWriter(config)
-    gloss.create_glossary()
-    gloss.create_terms()
-    
-    # 6. Metadata Enrichment (Optional - can be time-consuming)
-    print("Note: Run 'uv run python -m ingestion.cli enrich-metadata' to add table/column descriptions")
+
+    _run_catalog(config)
 
 @app.command()
 def enrich_metadata(
@@ -112,14 +117,15 @@ def enrich_metadata(
     Generate and apply table/column descriptions using hybrid or Google-only approach.
     
     This command offers two modes:
-    1. Manual + Google Insights (hybrid): Combine manual markdown with Google-style automation
+    1. Manual : Use manual markdown instead of Google Insights
     2. Google Insights Only: Use pure Google Dataplex-style automated metadata generation
     
     Examples:
-        # Mode 1: Hybrid approach (manual + Google insights)
+        # Mode 1: Manual approach (
         # Enrich all tables (uses default markdown files if they exist)
         uv run python -m ingestion.cli enrich-metadata
-        
+
+        #You can use the automated google insights as a starting point by running and then copy-paste in to markdown
         # Enrich specific tables with manual files
         uv run python -m ingestion.cli enrich-metadata \\
           --table-names wpp-dataproducts-lakehouse.marketing.audience,wpp-dataproducts-lakehouse.marketing.campaigns \\
@@ -258,9 +264,23 @@ def manage_glossary(
         print(f"❌ Unknown action: {action}. Use create, validate, apply, or reset.")
 
 @app.command()
-def ingest():
+def ingest(
+    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
+    catalog_project: str = typer.Option(None, "--catalog-project", help="GCP project where Dataplex catalog resides"),
+    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
+    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template")
+):
     print("Starting full streamed ingestion...")
     config = GeneratorConfig()
+    if data_project:
+        config.data_project_id = data_project
+    if catalog_project:
+        config.catalog_project_id = catalog_project
+    if iceberg_warehouse:
+        config.iceberg_warehouse = iceberg_warehouse
+    if biglake_connection:
+        config.biglake_connection = biglake_connection
+
     orchestrator = Orchestrator(config)
     writer = IcebergWriter(config)
     
@@ -268,7 +288,7 @@ def ingest():
     writer.write_stream(orchestrator.generate_all_streamed())
     
     # 2. Register Catalog
-    catalog()
+    _run_catalog(config)
     print("Ingestion complete.")
 
 @app.command()

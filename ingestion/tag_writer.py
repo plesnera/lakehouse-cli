@@ -2,6 +2,7 @@ import subprocess
 import os
 import tempfile
 import json
+from google.protobuf import field_mask_pb2
 from generators.config import GeneratorConfig
 from google.cloud import dataplex_v1
 from ingestion.table_metadata import load_all_table_metadata
@@ -92,25 +93,24 @@ class TagWriter:
                 aspect_data = {}
                 for k, v in fields.items():
                     if k == "row_count_approx":
-                        aspect_data[k] = {"doubleValue": float(v)}
+                        aspect_data[k] = float(v)
                     else:
-                        aspect_data[k] = {"stringValue": str(v)}
+                        aspect_data[k] = str(v)
 
                 aspect = dataplex_v1.Aspect(
                     aspect_type=f"{parent}/aspectTypes/{aspect_type_id}",
                     data=aspect_data,
                 )
 
-                # Get current entry, set aspect, update
-                entry = self.client.get_entry(name=entry_path)
-                if entry.aspects is None:
-                    entry.aspects = {}
-                entry.aspects[aspect_key] = aspect
+                update_entry = dataplex_v1.Entry(name=entry_path)
+                update_entry.aspects[aspect_key] = aspect
 
-                update_mask = {"paths": [f"aspects.{aspect_key}"]}
                 self.client.update_entry(
-                    entry=entry,
-                    update_mask=update_mask,
+                    request=dataplex_v1.UpdateEntryRequest(
+                        entry=update_entry,
+                        update_mask=field_mask_pb2.FieldMask(paths=["aspects"]),
+                        aspect_keys=[aspect_key],
+                    )
                 )
                 print(f"  ✅ Applied tag to {table_name}")
 

@@ -93,22 +93,6 @@ Description paragraph(s). This becomes the Dataplex catalog entry description.
 *   `## Columns` → `enrich-metadata` applies these as BigQuery column descriptions
 *   `Synonym Of: <column>` → the orchestrator copies the source column's values into the synonym column at generation time
 
-#### Adding Synonym Columns for a New Table
-
-To add a synonym column pair (e.g. `email_hash` as a synonym of `hem`):
-1.  Add the synonym column to your generator's schema and data dict (with `None` placeholder values)
-2.  Add the column to the metadata markdown with a `Synonym Of:` sub-bullet:
-    ```markdown
-    - email_hash: Alternative name for hashed email.
-      - Synonym Of: hem
-    ```
-3.  The orchestrator will automatically copy `hem` values into `email_hash` at generation time
-4.  Add the synonym relationship to `business_glossaries/glossary.md` so Dataplex creates the link:
-    ```markdown
-    - **hashed_email**
-      - Synonyms: hem, email_hash
-    ```
-
 #### Adding a New Data Source
 
 When integrating a new table into the lakehouse:
@@ -127,6 +111,27 @@ The data generation covers three target markets with realistic variation in data
 ## 📊 Data Generation Logic
 
 The synthetic data generation includes realistic patterns and variations that can be controlled through configuration:
+
+### Data Flow and BigQuery Visibility
+
+It's important to understand the two main stages for data to appear in BigQuery:
+
+1.  **Data Generation (`generate` command):** This step creates the synthetic data and writes it to a storage location.
+    *   By default, `uv run python -m ingestion.cli generate` will save data locally as Parquet files in the `local_output/` directory. This is for quick local testing and development.
+    *   To write data to Google Cloud Storage (GCS) as Iceberg tables, you must explicitly use the `--no-local` flag: `uv run python -m ingestion.cli generate --no-local`. The data will be stored in the GCS bucket configured for the Iceberg warehouse.
+    *   **Crucially, after this step, the data is ONLY in the specified storage location (local or GCS). It is NOT yet visible in BigQuery.**
+
+2.  **Catalog Registration (`catalog` command):** This separate step is required to make the GCS-based Iceberg data accessible and queryable within BigQuery.
+    *   The command `uv run python -m ingestion.cli catalog` reads the Iceberg metadata from your GCS warehouse and registers these tables as BigLake external tables in your BigQuery dataset.
+    *   **Only after successfully running the `catalog` command will the data appear in BigQuery.**
+
+For a full, end-to-end process that includes both generation (to GCS) and catalog registration, use the `ingest` command:
+
+```bash
+uv run python -m ingestion.cli ingest
+```
+
+This command automates both steps, ensuring your generated data is written to GCS and immediately made available in BigQuery.
 
 ### Controlling Generator Size and Match Rates
 

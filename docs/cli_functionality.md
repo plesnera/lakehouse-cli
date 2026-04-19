@@ -1,4 +1,9 @@
-# CLI Functionality - Marketing Data Platform
+# Google DataPLez and BiQUery Lake accelerator CLI 
+
+This project contains a collection of CLI tools that (intends) to accellerate ingestions, metadata generation and management of various 
+key componenet in the Google DataPlex and BigQuery domain.
+They were build out of frustration with the slow approach of doing everything via the console and the lack of a batched
+process for maintaing many tables with manually ingested metadata.
 
 ## 🚀 Getting Started
 
@@ -204,7 +209,23 @@ uv run python -m ingestion.cli create-templates
 
 ## 🔧 Metadata Enrichment
 
-Generate table and column descriptions to improve data discovery:
+#### Adding Synonym Columns for a New Table
+
+To add a synonym column pair (e.g. `email_hash` as a synonym of `hem`):
+1.  Add the synonym column to your generator's schema and data dict (with `None` placeholder values)
+2.  Add the column to the metadata markdown with a `Synonym Of:` sub-bullet:
+    ```markdown
+    - email_hash: Alternative name for hashed email.
+      - Synonym Of: hem
+    ```
+3.  The orchestrator will automatically copy `hem` values into `email_hash` at generation time
+4.  Add the synonym relationship to `business_glossaries/glossary.md` so Dataplex creates the link:
+    ```markdown
+    - **hashed_email**
+      - Synonyms: hem, email_hash
+    ```
+
+####  Generate table and column descriptions to improve data discovery:
 
 ```bash
 # Enrich all tables
@@ -219,11 +240,11 @@ uv run python -m ingestion.cli enrich-metadata --table-names pixel_events
 
 ### Two Distinct Modes:
 
-#### 🔧 Mode 1: Hybrid Approach (Manual + Google Insights)
+#### 🔧 Mode 1: Manual Markdown Approach (Pure Manual)
 **For users who want precise control over metadata content**
 
 - **Requires**: Manual markdown files in `metadata_descriptions/`
-- **Combines**: Your semantic context with Google-style automated insights
+- **Uses**: ONLY manual descriptions (no automated insights)
 - **Use Case**: When you need specific business terminology or context
 
 **Workflow:**
@@ -233,7 +254,7 @@ uv run python -m ingestion.cli create-templates
 
 # 2. Edit the markdown files in metadata_descriptions/
 
-# 3. Apply hybrid enrichment
+# 3. Apply manual metadata enrichment
 uv run python -m ingestion.cli enrich-metadata \
   --table-names wpp-dataproducts-lakehouse.marketing.audience \
   --metadata-files audience.md
@@ -243,7 +264,7 @@ uv run python -m ingestion.cli enrich-metadata \
 **For users who want fully automated Google Dataplex-style metadata**
 
 - **Requires**: NO manual markdown files
-- **Uses**: ONLY automated Google-style insights
+- **Uses**: ONLY automated Google-style insights (no heuristics)
 - **Use Case**: Quick setup, standard metadata patterns, or when manual descriptions aren't available
 
 **Workflow:**
@@ -259,26 +280,26 @@ uv run python -m ingestion.cli enrich-metadata --google-insights
 
 **Key Differences:**
 
-| Aspect | Hybrid Mode | Google Insights Mode |
-|--------|-------------|---------------------|
+| Aspect | Manual Markdown Mode | Google Insights Mode |
+|--------|---------------------|---------------------|
 | **Manual Files** | Required ✅ | Not Used ❌ |
-| **Automation** | Supplemental | Primary ✅ |
+| **Automation** | Not Used ❌ | Primary ✅ |
 | **Control** | Precise | Standardized |
 | **Setup** | More involved | Instant |
 | **Use Case** | Custom metadata | Quick/standard metadata |
 
 **When to Use Each Mode:**
 
-**Choose Hybrid Mode when:**
+**Choose Manual Markdown Mode when:**
 - You have specific business terminology to include
 - You need precise control over descriptions
-- You want to combine manual expertise with automation
+- You want to use only manual descriptions (no automation)
 - You're following a governed metadata process
 
 **Choose Google Insights Mode when:**
 - You need quick, standardized metadata
 - You don't have time for manual descriptions
-- You want pure Google Dataplex compliance
+- You want pure Google Dataplex compliance (no heuristics)
 - You're doing initial exploration or prototyping
 
 ## 📚 Business Glossary Management
@@ -439,7 +460,7 @@ The ingestion module contains the following classes that handle data ingestion a
 - **`TagWriter`** (`ingestion/tag_writer.py`): Applies Dataplex tags to tables based on markdown metadata
 - **`GlossaryWriter`** (`ingestion/glossary_writer.py`): Legacy wrapper for glossary operations (delegates to BusinessGlossaryManager)
 - **`BusinessGlossaryManager`** (`ingestion/glossary_manager.py`): Manages Dataplex business glossary creation and term linking
-- **`HybridMetadataEnricher`** (`ingestion/bq_metadata_hybrid.py`): Enriches tables with hybrid (manual + automated) metadata
+- **`HybridMetadataEnricher`** (`ingestion/bq_metadata_hybrid.py`): Enriches tables with pure metadata (manual OR Google Insights, not combined)
 
 ### Data Quality & Analysis
 - **`DataProfilingManager`** (`ingestion/data_profiling.py`): Creates and runs Dataplex data profile scans for statistical analysis (row counts, distributions, patterns)

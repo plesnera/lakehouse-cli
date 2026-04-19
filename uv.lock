@@ -504,6 +504,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyiceberg" },
+    { name = "requests" },
     { name = "sqlalchemy" },
     { name = "typer" },
 ]
@@ -518,6 +519,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyiceberg" },
+    { name = "requests" },
     { name = "sqlalchemy" },
     { name = "typer" },
 ]
