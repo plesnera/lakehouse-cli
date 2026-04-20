@@ -422,28 +422,71 @@ accessible from any project).
 
 ## 🛡️ Data Quality
 
-Create and run Dataplex data quality scans. Rules are loaded from `metadata_descriptions/*.md`
+Create, sync, and run Dataplex data quality scans. Rules are loaded from `metadata_descriptions/*.md`
 files (the `## Data Quality Rules` section per table), keeping DQ logic version-controlled
 alongside table metadata.
 
+The data quality command provides full lifecycle management:
+
 ```bash
-# Run quality scans on all tables
+# Compare markdown rules with active Dataplex rules (no changes made)
+uv run python -m ingestion.cli quality --check-rules
+
+# Sync rules from markdown to Dataplex without running scans
+uv run python -m ingestion.cli quality --sync-only
+
+# Sync rules AND run scans (default behavior)
 uv run python -m ingestion.cli quality
 
-# Run quality scans on specific tables
-uv run python -m ingestion.cli quality --table-names campaigns,transactions
+# Preview what would be synced
+uv run python -m ingestion.cli quality --sync-only --dry-run
 
-# Preview what would be created, including rule counts
-uv run python -m ingestion.cli quality --dry-run
+# Run quality scans on specific tables only
+uv run python -m ingestion.cli quality --table-names campaigns,transactions
 
 # View results of previous quality scans
 uv run python -m ingestion.cli quality --results
 ```
 
-**Preview output example:**
+**Understanding the workflow:**
+
+1. **Check rules** (`--check-rules`): Compares rules in markdown files with active rules in Dataplex.
+   Shows which rules would be added, removed, or changed. Makes no changes.
+
+2. **Sync only** (`--sync-only`): Updates Dataplex scans to match markdown rules.
+   Creates new scans if needed, updates existing ones if rules differ. Does NOT run scans.
+
+3. **Sync and run** (default): Syncs rules AND triggers scan runs. This is the standard
+   workflow for running data quality checks.
+
+**Rule comparison output example:**
 ```
-  [dry-run] Would create quality scan: quality-campaigns-1776613419 (4 rules)
-  [dry-run] Would create quality scan: quality-transactions-1776613419 (3 rules)
+Checking data quality rules for 6 table(s)...
+
+📋 campaigns:
+   Markdown rules: 4
+   Active rules: 4
+   Status: ✅ In sync
+
+📋 transactions:
+   Markdown rules: 3
+   Active rules: 2
+   Status: ⚠️  Out of sync
+   + Add: 1 rule(s)
+       - non_null_amount_usd on amount_usd
+```
+
+**Sync output example:**
+```
+Synchronizing data quality rules for 6 table(s)...
+
+  ✅ Created scan: quality-campaigns (4 rules)
+  ✅ Updated scan: quality-transactions
+     + Added 1 rules
+     - Removed 0 rules
+     ~ Changed 0 rules
+     = Total: 3 rules
+  ℹ️  Scan quality-audience rules are up to date (5 rules)
 ```
 
 **To add or modify rules**, edit the `## Data Quality Rules` section in the relevant

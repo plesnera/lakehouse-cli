@@ -387,14 +387,58 @@ def profile(
 def quality(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print plan without creating scans"),
     results: bool = typer.Option(False, "--results", help="Show latest quality results instead of creating scans"),
+    check_rules: bool = typer.Option(False, "--check-rules", help="Compare markdown rules with active Dataplex rules"),
+    sync_only: bool = typer.Option(False, "--sync-only", help="Sync rules without running scans"),
+    run: bool = typer.Option(False, "--run", help="Run scans (implied if no other action flags)"),
+    table_names: str = typer.Option(None, help="Comma-separated list of table names to process"),
 ):
-    """Create and run Dataplex data quality scans with marketing-specific rules."""
+    """Manage Dataplex data quality scans with marketing-specific rules.
+
+    This command provides full lifecycle management for data quality scans:
+    - Create/update scans with rules from markdown files
+    - Compare markdown rules with active Dataplex rules
+    - Sync rules without running scans
+    - Run quality scans
+
+    Examples:
+        # Check if markdown rules match active Dataplex rules (no changes made)
+        uv run python -m ingestion.cli quality --check-rules
+
+        # Sync rules without running scans
+        uv run python -m ingestion.cli quality --sync-only
+
+        # Sync rules and run scans (default behavior)
+        uv run python -m ingestion.cli quality
+
+        # Preview what would be synced
+        uv run python -m ingestion.cli quality --sync-only --dry-run
+
+        # Run specific tables only
+        uv run python -m ingestion.cli quality --table-names campaigns,transactions
+
+        # View results of previous runs
+        uv run python -m ingestion.cli quality --results
+    """
     config = GeneratorConfig()
     mgr = DataQualityManager(config)
+
+    # Parse table names if provided
+    tables = None
+    if table_names:
+        tables = [t.strip() for t in table_names.split(',')]
+
+    # Default to run behavior if no action flags specified
+    if not any([results, check_rules, sync_only, run]):
+        run = True
+
     if results:
-        mgr.get_results()
-    else:
-        mgr.create_and_run_scans(dry_run=dry_run)
+        mgr.get_results(tables)
+    elif check_rules:
+        mgr.check_rules(tables)
+    elif sync_only:
+        mgr.sync_only(tables, dry_run=dry_run)
+    elif run:
+        mgr.create_and_run_scans(tables, dry_run=dry_run)
 
 
 @app.command()
