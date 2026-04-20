@@ -8,7 +8,7 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-profiling-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
-
+import time
 from generators.config import GeneratorConfig
 
 TABLES = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
@@ -21,6 +21,21 @@ class DataProfilingManager:
         self.config = config
         self.client = dataplex_v1.DataScanServiceClient()
         self.parent = f"projects/{config.project_id}/locations/{config.location}"
+        self._ensure_results_dataset()
+
+    def _ensure_results_dataset(self) -> None:
+        """Create the profile-results dataset if it doesn't exist."""
+        bq_client = self.client
+        from google.cloud import bigquery
+        bq = bigquery.Client(project=self.config.project_id)
+        dataset_id = f"{self.config.iceberg_namespace}_profile_results"
+        try:
+            bq.get_dataset(dataset_id)
+        except Exception:
+            bq.create_dataset(
+                bigquery.Dataset(f"{self.config.project_id}.{dataset_id}")
+            )
+            print(f"  ✅ Created BigQuery dataset: {dataset_id}")
 
     # ------------------------------------------------------------------
     # Public API
@@ -31,7 +46,7 @@ class DataProfilingManager:
         tables = tables or TABLES
 
         for table in tables:
-            scan_id = f"profile-{table}"
+            scan_id = f"profile-{table.replace('_', '-')}-{int(time.time())}"
             bq_resource = (
                 f"//bigquery.googleapis.com/projects/{self.config.project_id}"
                 f"/datasets/{self.config.iceberg_namespace}/tables/{table}"
@@ -76,6 +91,7 @@ class DataProfilingManager:
     def _ensure_scan(self, scan_id: str, bq_resource: str, table: str) -> str:
         """Create a profile DataScan if it doesn't already exist."""
         scan_name = f"{self.parent}/dataScans/{scan_id}"
+
         try:
             self.client.get_data_scan(
                 request=dataplex_v1.GetDataScanRequest(name=scan_name)
@@ -85,11 +101,24 @@ class DataProfilingManager:
         except NotFound:
             pass
 
+        results_table = (
+            f"//bigquery.googleapis.com/projects/{self.config.project_id}"
+            f"/datasets/{self.config.iceberg_namespace}_profile_results/tables/{table}_profile"
+        )
+        bigquery_export = dataplex_v1.DataProfileSpec.PostScanActions.BigQueryExport(
+            results_table=results_table,
+        )
+        post_scan_actions = dataplex_v1.DataProfileSpec.PostScanActions(
+            bigquery_export=bigquery_export,
+        )
+
         data_scan = dataplex_v1.DataScan(
             display_name=f"Profile — {table}",
             description=f"Automated data profile scan for the {table} marketing table.",
             data=dataplex_v1.DataSource(resource=bq_resource),
-            data_profile_spec=dataplex_v1.DataProfileSpec(),
+            data_profile_spec=dataplex_v1.DataProfileSpec(
+                post_scan_actions=post_scan_actions,
+            ),
             execution_spec=dataplex_v1.DataScan.ExecutionSpec(
                 trigger=dataplex_v1.Trigger(
                     on_demand=dataplex_v1.Trigger.OnDemand()

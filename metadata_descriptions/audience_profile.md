@@ -31,3 +31,10 @@ Modelled audience segments derived from panel survey data and behavioural signal
   - Synonym Of: lon
 - panel_weight: Statistical projection weight. Use when scaling segment counts to population estimates.
 - created_at: Record creation timestamp.
+
+## Data Quality Rules
+- audience_id: non_null
+- segment_name: non_null
+- hem: non_null threshold=0.57
+- lat: non_null
+- lon: non_null

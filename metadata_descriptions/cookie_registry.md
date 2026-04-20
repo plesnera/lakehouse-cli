@@ -29,3 +29,8 @@ Maps cookie identifiers to device metadata, partial hashed email matches, and au
 - browser: Browser or app identifier: Chrome | Safari | Firefox | App | Unknown.
 - first_seen_at: Timestamp of first observation for this cookie.
 - last_seen_at: Timestamp of most recent observation.
+
+## Data Quality Rules
+- cookie_id: non_null
+- audience_id: non_null threshold=0.37
+- hem: non_null threshold=0.32

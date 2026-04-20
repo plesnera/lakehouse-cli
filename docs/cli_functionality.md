@@ -225,6 +225,71 @@ To add a synonym column pair (e.g. `email_hash` as a synonym of `hem`):
       - Synonyms: hem, email_hash
     ```
 
+#### Defining Data Quality Rules in Markdown
+Deep dive on syntax in the docs (https://docs.cloud.google.com/dataplex/docs/auto-data-quality-overview#rule-definition)
+Data quality rules are defined in the `## Data Quality Rules` section of each table's metadata markdown file.
+This replaces the previous approach of hardcoded Python rules and allows DQ rules to be version-controlled
+alongside table metadata.
+
+**Rule syntax:**
+```markdown
+- column_name: rule_type [param=value ...]
+```
+
+**Supported rule types:**
+
+| Rule Type | Parameters | Example |
+|-----------|------------|---------|
+| `non_null` | `threshold` (float, default 1.0), `dimension` (str, default COMPLETENESS) | `- audience_id: non_null` |
+| `set` | `values` (comma-sep list), `dimension` (default VALIDITY) | `- status: set values=planned,active,completed,paused` |
+| `regex` | `pattern` (str), `threshold`, `dimension` | `- email: regex pattern=^[a-z]+@[a-z]+\.com` |
+| `range` | `min`, `max`, `strict_min`, `strict_max`, `threshold`, `dimension` | `- age: range min=18 max=120` |
+
+**Complete example — `metadata_descriptions/campaigns.md`:**
+```markdown
+# Campaign / Flight Metadata
+
+Master record for advertising campaigns...
+
+## Tags
+- business_owner: Marketing Data Products
+- data_domain: campaigns
+
+## Columns
+- campaign_id: Primary key (UUID v4).
+- status: Lifecycle state: planned | active | completed | paused.
+- ...
+
+## Data Quality Rules
+- campaign_id: non_null
+- brand: non_null
+- advertiser: non_null
+- status: set values=planned,active,completed,paused dimension=VALIDITY
+```
+
+**Example with threshold — `metadata_descriptions/audience_profile.md`:**
+```markdown
+## Data Quality Rules
+- audience_id: non_null
+- segment_name: non_null
+- hem: non_null threshold=0.57 dimension=COMPLETENESS
+- lat: non_null
+- lon: non_null
+```
+
+The `hem` rule specifies a 57% completeness threshold (matching the ~60% populate rate
+in the synthetic data, with a small margin).
+
+**Rules are loaded automatically when running DQ scans:**
+```bash
+uv run python -m ingestion.cli quality --dry-run
+```
+
+The `DataQualityManager` reads all `## Data Quality Rules` sections from `metadata_descriptions/*.md`
+files and converts them to Dataplex `DataQualityRule` objects at scan creation time.
+
+To add a new rule, simply edit the appropriate markdown file and re-run the quality CLI.
+
 ####  Generate table and column descriptions to improve data discovery:
 
 ```bash
@@ -322,7 +387,9 @@ uv run python -m ingestion.cli manage-glossary --action apply
 
 ## 📊 Data Profiling
 
-Create and run Dataplex data profile scans for statistical analysis:
+Create and run Dataplex data profile scans for statistical analysis. Results are automatically
+published to a dedicated BigQuery dataset (`<namespace>_profile_results`) for easy querying
+and Looker Studio dashboards.
 
 ```bash
 # Profile all tables
@@ -338,9 +405,26 @@ uv run python -m ingestion.cli profile --dry-run
 uv run python -m ingestion.cli profile --results
 ```
 
+**Results table location:**
+
+Profile results are written to BigQuery tables in the `marketing_profile_results` dataset
+(named `<table>_profile`, e.g. `audience_profile`, `campaigns_profile`).
+
+Query results directly:
+```sql
+SELECT * FROM `wpp-dataproducts-lakehouse.marketing_profile_results.audience_profile`
+ORDER BY job_start_time DESC
+LIMIT 10;
+```
+
+Or view the "Data profile" tab on the source table in BigQuery Studio (results are
+accessible from any project).
+
 ## 🛡️ Data Quality
 
-Create and run Dataplex data quality scans with marketing-specific rules:
+Create and run Dataplex data quality scans. Rules are loaded from `metadata_descriptions/*.md`
+files (the `## Data Quality Rules` section per table), keeping DQ logic version-controlled
+alongside table metadata.
 
 ```bash
 # Run quality scans on all tables
@@ -349,12 +433,21 @@ uv run python -m ingestion.cli quality
 # Run quality scans on specific tables
 uv run python -m ingestion.cli quality --table-names campaigns,transactions
 
-# Preview what would be created (dry-run)
+# Preview what would be created, including rule counts
 uv run python -m ingestion.cli quality --dry-run
 
 # View results of previous quality scans
 uv run python -m ingestion.cli quality --results
 ```
+
+**Preview output example:**
+```
+  [dry-run] Would create quality scan: quality-campaigns-1776613419 (4 rules)
+  [dry-run] Would create quality scan: quality-transactions-1776613419 (3 rules)
+```
+
+**To add or modify rules**, edit the `## Data Quality Rules` section in the relevant
+`metadata_descriptions/<table>.md` file and re-run the quality command.
 
 ## 🚀 Advanced Features
 

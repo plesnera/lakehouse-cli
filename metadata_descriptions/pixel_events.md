@@ -28,3 +28,9 @@ Event-level stream of ad tracking signals (impressions, clicks, video engagement
 - event_ts: Timestamp when the event occurred.
 - event_date: Date of the event (derived from event_ts).
 - partition_date: Iceberg partition key (day). Always filter on this column for time-range queries.
+
+## Data Quality Rules
+- event_id: non_null
+- campaign_id: non_null
+- creative_id: non_null
+- cookie_id: non_null threshold=0.79

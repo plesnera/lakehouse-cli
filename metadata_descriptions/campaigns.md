@@ -28,3 +28,9 @@ Master record for advertising campaigns. Contains two semantically equivalent co
 - end_date: Flight end date.
 - status: Lifecycle state: planned | active | completed | paused.
 - created_at: Record creation timestamp.
+
+## Data Quality Rules
+- campaign_id: non_null
+- brand: non_null
+- advertiser: non_null
+- status: set values=planned,active,completed,paused

@@ -23,3 +23,7 @@ Catalogue of ad creative assets linked to campaigns. Supports content performanc
 - brand: Advertiser brand (denormalised from campaigns for convenience).
 - theme_tags: IAB-aligned creative theme labels. Supports content-based similarity queries.
 - created_at: Upload timestamp for the creative asset.
+
+## Data Quality Rules
+- creative_id: non_null
+- campaign_id: non_null

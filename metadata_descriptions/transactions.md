@@ -29,3 +29,8 @@ Synthetic purchase transaction feed modelled on Mastercard merchant data. Repres
 - txn_ts: Timestamp when the transaction occurred.
 - event_date: Date of the transaction (derived from txn_ts).
 - partition_date: Iceberg partition key (day). Always filter on this column for time-range queries.
+
+## Data Quality Rules
+- txn_id: non_null
+- pan_token: non_null
+- amount_usd: non_null

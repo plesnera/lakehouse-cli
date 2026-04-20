@@ -51,6 +51,21 @@ class ColumnMeta:
 
 
 @dataclass
+class RuleMeta:
+    """Parsed data quality rule from markdown."""
+    column: str
+    rule_type: str  # non_null | set | regex | range
+    threshold: float = 1.0
+    dimension: str = "COMPLETENESS"
+    values: list[str] = field(default_factory=list)
+    pattern: str = ""
+    min_value: str = ""
+    max_value: str = ""
+    strict_min_enabled: bool = False
+    strict_max_enabled: bool = False
+
+
+@dataclass
 class TableMeta:
     """All metadata parsed from one table's markdown file."""
     table_id: str
@@ -58,6 +73,7 @@ class TableMeta:
     description: str
     tags: Dict[str, str] = field(default_factory=dict)
     columns: Dict[str, ColumnMeta] = field(default_factory=dict)
+    dq_rules: list[RuleMeta] = field(default_factory=list)
 
     # Convenience views -------------------------------------------------------
     @property
@@ -92,8 +108,9 @@ def parse_table_metadata(path: str) -> TableMeta:
     description_lines: list[str] = []
     tags: dict[str, str] = {}
     columns: dict[str, ColumnMeta] = {}
+    dq_rules: list[RuleMeta] = []
 
-    section: str | None = None  # "tags" | "columns" | None
+    section: str | None = None  # "tags" | "columns" | "dq_rules" | None
     current_col: ColumnMeta | None = None
 
     for raw in lines:
@@ -113,6 +130,8 @@ def parse_table_metadata(path: str) -> TableMeta:
                 section = "tags"
             elif heading == "columns":
                 section = "columns"
+            elif heading == "data quality rules":
+                section = "dq_rules"
             else:
                 section = None
             continue
@@ -154,6 +173,13 @@ def parse_table_metadata(path: str) -> TableMeta:
                 current_col = ColumnMeta(name=col_name, description=col_desc)
                 continue
 
+        # --- DQ Rules section --------------------------------------------------
+        if section == "dq_rules" and stripped.startswith("- "):
+            rule = _parse_dq_rule_line(stripped)
+            if rule:
+                dq_rules.append(rule)
+            continue
+
         # --- Description paragraph (between H1 and first H2) ----------------
         if section is None and stripped and not stripped.startswith("#"):
             description_lines.append(stripped)
@@ -168,6 +194,7 @@ def parse_table_metadata(path: str) -> TableMeta:
         description=" ".join(description_lines),
         tags=tags,
         columns=columns,
+        dq_rules=dq_rules,
     )
 
 
@@ -190,3 +217,78 @@ def load_all_table_metadata(
         result[meta.table_id] = meta
 
     return result
+
+
+def _parse_dq_rule_line(line: str) -> RuleMeta | None:
+    """Parse a single DQ rule bullet line.
+
+    Format: ``- column: rule_type [param=value ...]``
+
+    Examples:
+        - audience_id: non_null
+        - hem: non_null threshold=0.57
+        - status: set values=planned,active,completed,paused
+    """
+    # Strip leading "- " and trailing whitespace
+    content = line.strip()
+    if content.startswith("- "):
+        content = content[2:]
+    else:
+        return None
+
+    # Split on first colon to get column: rule_type [...]
+    colon_idx = content.find(":")
+    if colon_idx == -1:
+        return None
+
+    column = content[:colon_idx].strip()
+    rest = content[colon_idx + 1:].strip()
+
+    # rest is "rule_type [param=value ...]"
+    parts = rest.split()
+    if not parts:
+        return None
+
+    rule_type = parts[0]
+    params: dict[str, str] = {}
+    for param_part in parts[1:]:
+        if "=" in param_part:
+            key, _, val = param_part.partition("=")
+            params[key.strip()] = val.strip()
+
+    rule = RuleMeta(column=column, rule_type=rule_type)
+
+    if "threshold" in params:
+        rule.threshold = float(params["threshold"])
+    if "dimension" in params:
+        rule.dimension = params["dimension"]
+
+    if rule_type == "set":
+        if "values" in params:
+            rule.values = [v.strip() for v in params["values"].split(",")]
+
+    elif rule_type == "regex":
+        if "pattern" in params:
+            rule.pattern = params["pattern"]
+
+    elif rule_type == "range":
+        if "min" in params:
+            rule.min_value = params["min"]
+        if "max" in params:
+            rule.max_value = params["max"]
+        rule.strict_min_enabled = str(params.get("strict_min", "false")).lower() == "true"
+        rule.strict_max_enabled = str(params.get("strict_max", "false")).lower() == "true"
+
+    return rule
+
+
+def parse_dq_rules(section_lines: list[str]) -> list[RuleMeta]:
+    """Parse DQ rules from section bullet lines."""
+    rules = []
+    for line in section_lines:
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            rule = _parse_dq_rule_line(stripped)
+            if rule:
+                rules.append(rule)
+    return rules

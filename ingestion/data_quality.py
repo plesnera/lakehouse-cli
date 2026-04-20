@@ -8,70 +8,44 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-quality-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
-
+import time
 from generators.config import GeneratorConfig
+from ingestion.table_metadata import METADATA_DIR, load_all_table_metadata, RuleMeta
 
 TABLES = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
 
 
-def _non_null_rule(column: str, threshold: float = 1.0) -> dataplex_v1.DataQualityRule:
-    """Column must not be null (threshold = fraction of rows that must pass)."""
-    return dataplex_v1.DataQualityRule(
-        column=column,
-        non_null_expectation=dataplex_v1.DataQualityRule.NonNullExpectation(),
-        threshold=threshold,
+def _rule_from_meta(meta: RuleMeta) -> dataplex_v1.DataQualityRule:
+    """Convert a RuleMeta to a dataplex DataQualityRule."""
+    kwargs = dict(
+        name=f"{meta.rule_type}_{meta.column}",
+        column=meta.column,
+        dimension=meta.dimension,
+        threshold=meta.threshold,
     )
+    if meta.rule_type == "non_null":
+        kwargs["non_null_expectation"] = dataplex_v1.DataQualityRule.NonNullExpectation()
+    elif meta.rule_type == "set":
+        kwargs["set_expectation"] = dataplex_v1.DataQualityRule.SetExpectation(values=meta.values)
+    elif meta.rule_type == "regex":
+        kwargs["regex_expectation"] = dataplex_v1.DataQualityRule.RegexExpectation(pattern=meta.pattern)
+    elif meta.rule_type == "range":
+        kwargs["range_expectation"] = dataplex_v1.DataQualityRule.RangeExpectation(
+            min_value=meta.min_value,
+            max_value=meta.max_value,
+            strict_min=meta.strict_min_enabled,
+            strict_max=meta.strict_max_enabled,
+        )
+    return dataplex_v1.DataQualityRule(**kwargs)
 
 
-def _set_rule(column: str, values: list[str]) -> dataplex_v1.DataQualityRule:
-    """Column values must belong to the given set."""
-    return dataplex_v1.DataQualityRule(
-        column=column,
-        set_expectation=dataplex_v1.DataQualityRule.SetExpectation(values=values),
-        threshold=1.0,
-    )
-
-
-# Per-table quality rules sourced from Agent.md / lakehouse-final.md §4.3
-# For fill-rate checks we use non_null with a threshold.
-# e.g. hem 60% populated → threshold=0.57 (allow ±3pp)
-TABLE_RULES: dict[str, list[dataplex_v1.DataQualityRule]] = {
-    "audience": [
-        _non_null_rule("audience_id"),
-        _non_null_rule("segment_name"),
-        # hem ~60% populated → at least 57% non-null
-        _non_null_rule("hem", threshold=0.57),
-    ],
-    "cookie_registry": [
-        _non_null_rule("cookie_id"),
-        # audience_id ~40% populated → at least 37% non-null
-        _non_null_rule("audience_id", threshold=0.37),
-        # hem ~35% populated → at least 32% non-null
-        _non_null_rule("hem", threshold=0.32),
-    ],
-    "campaigns": [
-        _non_null_rule("campaign_id"),
-        _non_null_rule("brand"),
-        _non_null_rule("advertiser"),
-        _set_rule("status", ["planned", "active", "completed", "paused"]),
-    ],
-    "creatives": [
-        _non_null_rule("creative_id"),
-        _non_null_rule("campaign_id"),
-    ],
-    "pixel_events": [
-        _non_null_rule("event_id"),
-        _non_null_rule("campaign_id"),
-        _non_null_rule("creative_id"),
-        # cookie_id ~82% populated → at least 79% non-null
-        _non_null_rule("cookie_id", threshold=0.79),
-    ],
-    "transactions": [
-        _non_null_rule("txn_id"),
-        _non_null_rule("pan_token"),
-        _non_null_rule("amount_usd"),
-    ],
-}
+def load_dq_rules_from_md(metadata_dir: str = METADATA_DIR) -> dict[str, list[dataplex_v1.DataQualityRule]]:
+    """Load DQ rules from markdown files, return {table_id: [DataQualityRule, ...]}."""
+    all_meta = load_all_table_metadata(metadata_dir)
+    rules: dict[str, list[dataplex_v1.DataQualityRule]] = {}
+    for table_id, meta in all_meta.items():
+        rules[table_id] = [_rule_from_meta(rule) for rule in meta.dq_rules]
+    return rules
 
 
 class DataQualityManager:
@@ -85,14 +59,15 @@ class DataQualityManager:
     def create_and_run_scans(self, tables: list[str] | None = None, dry_run: bool = False) -> None:
         """Create a DQ DataScan for each table and trigger a run."""
         tables = tables or TABLES
+        dq_rules = load_dq_rules_from_md()
 
         for table in tables:
-            scan_id = f"quality-{table}"
+            scan_id = f"quality-{table.replace('_', '-')}-{int(time.time())}"
             bq_resource = (
                 f"//bigquery.googleapis.com/projects/{self.config.project_id}"
                 f"/datasets/{self.config.iceberg_namespace}/tables/{table}"
             )
-            rules = TABLE_RULES.get(table, [])
+            rules = dq_rules.get(table, [])
 
             if dry_run:
                 print(f"  [dry-run] Would create quality scan: {scan_id} ({len(rules)} rules)")
