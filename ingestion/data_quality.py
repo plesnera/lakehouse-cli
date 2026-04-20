@@ -8,11 +8,8 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-quality-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
-import time
-from generators.config import GeneratorConfig
+from generators.config import GeneratorConfig, TABLES
 from ingestion.table_metadata import METADATA_DIR, load_all_table_metadata, RuleMeta
-
-TABLES = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
 
 
 def _rule_from_meta(meta: RuleMeta) -> dataplex_v1.DataQualityRule:

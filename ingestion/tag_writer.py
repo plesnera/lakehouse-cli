@@ -3,7 +3,7 @@ import os
 import tempfile
 import json
 from google.protobuf import field_mask_pb2
-from generators.config import GeneratorConfig
+from generators.config import GeneratorConfig, TABLES
 from google.cloud import dataplex_v1
 from ingestion.table_metadata import load_all_table_metadata
 
@@ -71,20 +71,18 @@ class TagWriter:
         markdown file in ``metadata_descriptions/``.  Edit those files to
         change what gets applied to Dataplex entries.
         """
-        parent = f"projects/{self.config.project_id}/locations/{self.config.location}"
-        entry_group_path = f"{parent}/entryGroups/marketing-lakehouse"
+        parent = self.config.resource_parent
         aspect_type_id = "marketing-table-metadata"
 
         all_meta = load_all_table_metadata()
-        tables = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
 
-        for table_name in tables:
+        for table_name in TABLES:
             meta = all_meta.get(table_name)
             if not meta or not meta.tags:
                 print(f"  ⚠️  No tags found in metadata for {table_name} — skipping")
                 continue
             fields = meta.tags
-            entry_path = f"{entry_group_path}/entries/{table_name}"
+            entry_path = f"{self.config.entry_group_path}/entries/{table_name}"
             aspect_key = f"{self.config.project_id}.{self.config.location}.{aspect_type_id}"
 
             try:

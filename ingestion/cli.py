@@ -1,5 +1,5 @@
 import typer
-from generators.config import GeneratorConfig
+from generators.config import GeneratorConfig, TABLES
 from generators.orchestrator import Orchestrator
 from ingestion.iceberg_writer import IcebergWriter
 from ingestion.bq_external import BigLakeRegistrar
@@ -15,7 +15,6 @@ from ingestion.vector_search import VectorSearchManager
 from ingestion.bqml_gemini import BQMLGeminiManager
 from ingestion.continuous_queries import ContinuousQueryManager
 import os
-import pyarrow.parquet as pq
 
 app = typer.Typer()
 
@@ -297,7 +296,8 @@ def validate(local: bool = True):
     config = GeneratorConfig()
     
     if local:
-        for name in ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]:
+        import pyarrow.parquet as pq
+        for name in TABLES:
             path = f"local_output/{name}.parquet"
             if not os.path.exists(path):
                 print(f"FAILED: Local file {path} missing.")
@@ -492,7 +492,7 @@ def reset(
     print("Deleting BigQuery external tables...")
     bq_client = bigquery.Client(project=config.project_id)
     dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
-    for name in ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]:
+    for name in TABLES:
         table_id = f"{dataset_id}.{name}"
         bq_client.delete_table(table_id, not_found_ok=True)
         print(f"  Deleted BQ table: {name}")
@@ -509,10 +509,9 @@ def reset(
     print("Deleting catalog entries...")
     from google.cloud import dataplex_v1
     catalog_client = dataplex_v1.CatalogServiceClient()
-    parent = f"projects/{config.project_id}/locations/{config.location}/entryGroups/marketing-lakehouse"
-    for name in ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]:
+    for name in TABLES:
         try:
-            catalog_client.delete_entry(name=f"{parent}/entries/{name}")
+            catalog_client.delete_entry(name=f"{config.entry_group_path}/entries/{name}")
             print(f"  Deleted entry: {name}")
         except Exception:
             pass

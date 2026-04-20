@@ -8,10 +8,7 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-profiling-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
-import time
-from generators.config import GeneratorConfig
-
-TABLES = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
+from generators.config import GeneratorConfig, TABLES
 
 
 class DataProfilingManager:
@@ -25,7 +22,6 @@ class DataProfilingManager:
 
     def _ensure_results_dataset(self) -> None:
         """Create the profile-results dataset if it doesn't exist."""
-        bq_client = self.client
         from google.cloud import bigquery
         bq = bigquery.Client(project=self.config.project_id)
         dataset_id = f"{self.config.iceberg_namespace}_profile_results"

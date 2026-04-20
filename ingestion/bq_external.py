@@ -1,5 +1,5 @@
 from google.cloud import bigquery
-from generators.config import GeneratorConfig
+from generators.config import GeneratorConfig, TABLES
 
 class BigLakeRegistrar:
     def __init__(self, config: GeneratorConfig):
@@ -8,7 +8,7 @@ class BigLakeRegistrar:
 
     def register_tables(self):
         dataset_id = f"{self.config.catalog_project_id}.{self.config.iceberg_namespace}"
-        
+
         # Ensure dataset exists
         try:
             self.client.get_dataset(dataset_id)
@@ -17,8 +17,6 @@ class BigLakeRegistrar:
             dataset.location = self.config.location
             self.client.create_dataset(dataset)
             print(f"Created dataset: {dataset_id}")
-
-        tables = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
         
         from google.cloud import storage
         # Use data project for storage access (supports cross-project)

@@ -1,5 +1,5 @@
 from google.cloud import dataplex_v1
-from generators.config import GeneratorConfig
+from generators.config import GeneratorConfig, TABLES
 from ingestion.table_metadata import load_all_table_metadata
 
 
@@ -9,7 +9,7 @@ class CatalogManager:
         self.client = dataplex_v1.CatalogServiceClient()
 
     def ensure_entry_group(self):
-        parent = f"projects/{self.config.project_id}/locations/{self.config.location}"
+        parent = self.config.catalog_resource_parent
         entry_group_id = "marketing-lakehouse"
         entry_group_path = f"{parent}/entryGroups/{entry_group_id}"
 
@@ -33,13 +33,11 @@ class CatalogManager:
         ``metadata_descriptions/*.md`` — edit those files to change what
         appears in the Dataplex Knowledge Catalog.
         """
-        parent = f"projects/{self.config.catalog_project_id}/locations/{self.config.location}/entryGroups/marketing-lakehouse"
         all_meta = load_all_table_metadata()
-        tables = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]
 
-        for name in tables:
+        for name in TABLES:
             entry_id = name
-            entry_path = f"{parent}/entries/{entry_id}"
+            entry_path = f"{self.config.entry_group_path}/entries/{entry_id}"
             meta = all_meta.get(name)
             display = meta.display_name if meta else name
 
@@ -48,10 +46,10 @@ class CatalogManager:
                 print(f"Entry {entry_id} exists.")
             except Exception:
                 entry = dataplex_v1.Entry(
-                    entry_type=f"projects/{self.config.catalog_project_id}/locations/{self.config.location}/entryTypes/table",
+                    entry_type=f"{self.config.catalog_resource_parent}/entryTypes/table",
                 )
                 self.client.create_entry(
-                    parent=parent,
+                    parent=self.config.entry_group_path,
                     entry_id=entry_id,
                     entry=entry,
                 )

@@ -102,3 +102,27 @@ class GeneratorConfig(BaseModel):
     def project_id(self) -> str:
         """Maintain backward compatibility - defaults to catalog_project_id"""
         return self.catalog_project_id
+
+    # Resource path helpers
+    @property
+    def resource_parent(self) -> str:
+        """Returns projects/{project_id}/locations/{location}"""
+        return f"projects/{self.project_id}/locations/{self.location}"
+
+    @property
+    def catalog_resource_parent(self) -> str:
+        """Returns projects/{catalog_project_id}/locations/{location}"""
+        return f"projects/{self.catalog_project_id}/locations/{self.location}"
+
+    @property
+    def entry_group_path(self) -> str:
+        """Returns the full entry group resource path"""
+        return f"{self.catalog_resource_parent}/entryGroups/marketing-lakehouse"
+
+    def get_bq_resource_path(self, table: str) -> str:
+        """Returns the BigQuery resource path for a table"""
+        return f"//bigquery.googleapis.com/projects/{self.project_id}/datasets/{self.iceberg_namespace}/tables/{table}"
+
+
+# Table list - single source of truth for all tables in the lakehouse
+TABLES = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]

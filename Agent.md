@@ -29,11 +29,34 @@ Dataform for Agentic Pipelines: A framework for managing SQL-based transformatio
 | GCP Project | `wpp-dataproducts-lakehouse` |
 | Region | `us-east1` |
 | Iceberg table format | BigLake Iceberg tables (docs: https://docs.cloud.google.com/bigquery/docs/biglake-iceberg-tables-in-bigquery) |
-| GCS warehouse bucket | To be provisioned under `gs://wpp-dataproducts-lakehouse-*/` |
-| Dataplex Lake name | `demo-data` (create from scratch) |
-| Dataplex Zone | `raw-data` (RAW) and `curated-data` (CURATED) |
+| GCS warehouse bucket | `gs://{project-id}-warehouse/iceberg/` |
+| Dataplex Lake name | `demo-data` |
+| Dataplex Zone | `curated-data` (CURATED) — single-zone light approach |
 | Catalog Entry Group | `marketing-lakehouse` |
 | Business Glossary | `marketing-glossary` |
+
+### Architecture Approach
+
+This demo uses a **lightweight single-zone architecture**:
+
+- **No RAW zone**: Data is generated as synthetic Iceberg tables and registered directly in BigQuery as BigLake external tables. There is no separate "landing" or "raw" storage layer.
+- **Single CURATED zone**: The BigQuery dataset (`marketing`) is registered as a Dataplex asset in the `curated-data` zone. All tables are queryable via BigQuery immediately after ingestion.
+- **Simplified pipeline**: Data flows directly: Generator → Iceberg (GCS) → BigLake → BigQuery → Dataplex Catalog
+
+This approach reduces complexity and storage costs while still demonstrating all Dataplex features (Data Quality, Profiling, Catalog, Business Glossary). For production workloads requiring data lineage, recovery, or transformation pipelines, consider implementing a full RAW/CURATED zone separation with Dataform or Cloud Composer.
+
+### BigQuery Tables
+
+After ingestion, the following tables are available in BigQuery:
+
+| Table | Dataset | Description |
+|-------|---------|-------------|
+| `audience` | `marketing` | Modelled audience segments from panel data |
+| `cookie_registry` | `marketing` | Device/cookie identity map |
+| `campaigns` | `marketing` | Campaign and flight metadata |
+| `creatives` | `marketing` | Creative asset library |
+| `pixel_events` | `marketing` | Ad tracking pixel events |
+| `transactions` | `marketing` | Purchase transaction feed |
 
 ### Infrastructure Pre-requisites
 
@@ -43,7 +66,7 @@ The following resources must exist before ingestion utilities are run:
 2. **BigLake connection** — `projects/wpp-dataproducts-lakehouse/locations/us-east1/connections/biglake-conn`
 3. **BigQuery dataset** — `wpp-dataproducts-lakehouse.marketing` in `us-east1`
 4. **Dataplex Lake** — `demo-data` in `us-east1`
-5. **Dataplex Zones** — `raw-data` (RAW) and `curated-data` (CURATED) under `demo-data`
+5. **Dataplex Zone** — `curated-data` (CURATED) under `demo-data`
 6. **IAM roles** required by the service account running ingestion:
    - `roles/bigquery.dataEditor`
    - `roles/bigquery.connectionAdmin`
@@ -176,7 +199,7 @@ A design document covering the full data model, table schemas with column names,
 
 ### D2 — Dataplex Knowledge Catalog Metadata
 Descriptive metadata for every data object and all attributes, structured for Dataplex Knowledge Catalog requirements:
-- Dataplex Lake / Zone topology
+- Dataplex Lake / Zone topology (single `curated-data` zone)
 - Entry Group and per-table catalog entries with display names and descriptions
 - Column-level annotations including synonym cross-references
 - Tag template (`marketing_table_metadata`) applied to all entries
