@@ -24,7 +24,7 @@ class BigLakeRegistrar:
         bucket_name = self.config.iceberg_warehouse.replace("gs://", "").split("/")[0]
         bucket = storage_client.bucket(bucket_name)
 
-        for name in tables:
+        for name in TABLES:
             table_id = f"{dataset_id}.{name}"
             
             # Find the latest metadata file

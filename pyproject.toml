@@ -14,5 +14,14 @@ dependencies = [
     "numpy",
     "sqlalchemy",
     "requests",
-
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "typer[testing]",
+]
+
+[project.scripts]
+lakehouse = "ingestion.cli:app"

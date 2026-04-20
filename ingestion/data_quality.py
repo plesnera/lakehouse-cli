@@ -25,13 +25,13 @@ def _rule_from_meta(meta: RuleMeta) -> dataplex_v1.DataQualityRule:
     elif meta.rule_type == "set":
         kwargs["set_expectation"] = dataplex_v1.DataQualityRule.SetExpectation(values=meta.values)
     elif meta.rule_type == "regex":
-        kwargs["regex_expectation"] = dataplex_v1.DataQualityRule.RegexExpectation(pattern=meta.pattern)
+        kwargs["regex_expectation"] = dataplex_v1.DataQualityRule.RegexExpectation(regex=meta.pattern)
     elif meta.rule_type == "range":
         kwargs["range_expectation"] = dataplex_v1.DataQualityRule.RangeExpectation(
             min_value=meta.min_value,
             max_value=meta.max_value,
-            strict_min=meta.strict_min_enabled,
-            strict_max=meta.strict_max_enabled,
+            strict_min_enabled=meta.strict_min_enabled,
+            strict_max_enabled=meta.strict_max_enabled,
         )
     return dataplex_v1.DataQualityRule(**kwargs)
 
@@ -45,21 +45,23 @@ def _rule_to_dict(rule: dataplex_v1.DataQualityRule) -> dict:
         "threshold": rule.threshold,
     }
 
-    # Add expectation-specific fields
-    if rule.non_null_expectation:
+    # Use proto-level HasField to detect which expectation is set
+    # (proto-plus wrappers are falsy even when explicitly set)
+    pb = rule._pb
+    if pb.HasField("non_null_expectation"):
         result["rule_type"] = "non_null"
-    elif rule.set_expectation:
+    elif pb.HasField("set_expectation"):
         result["rule_type"] = "set"
         result["values"] = sorted(rule.set_expectation.values)
-    elif rule.regex_expectation:
+    elif pb.HasField("regex_expectation"):
         result["rule_type"] = "regex"
-        result["pattern"] = rule.regex_expectation.pattern
-    elif rule.range_expectation:
+        result["pattern"] = rule.regex_expectation.regex
+    elif pb.HasField("range_expectation"):
         result["rule_type"] = "range"
         result["min_value"] = rule.range_expectation.min_value
         result["max_value"] = rule.range_expectation.max_value
-        result["strict_min"] = rule.range_expectation.strict_min
-        result["strict_max"] = rule.range_expectation.strict_max
+        result["strict_min"] = rule.range_expectation.strict_min_enabled
+        result["strict_max"] = rule.range_expectation.strict_max_enabled
 
     return result
 

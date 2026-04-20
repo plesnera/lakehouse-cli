@@ -8,6 +8,8 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-profiling-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
+import time
+
 from generators.config import GeneratorConfig, TABLES
 
 
