@@ -7,7 +7,8 @@ The specific goals of this project are the following:
 * To generate synthetic marketing data for a demo. 
 * Create the necessary utilities to ingest data in the Apache Icerberg format into a lake (the 'marketing" lake for this demo).
 * Demonstrate the following Dataplex services in use on the synthetic data:
-  * AAutomated Data Insights Generation: Generates natural language summaries and column descriptions to help agents understand schema context (https://docs.cloud.google.com/bigquery/docs/data-insights#generate-column-table-descriptions)
+  * Create a Lakehouse Metastore Catalogue: Ensures that the different processing engines such as BigQuery and Apache Spark can utilize the same data with same governance and without transforming it: https://docs.cloud.google.com/biglake/docs/biglake-console)  
+  * Automated Data Insights Generation: Generates natural language summaries and column descriptions to help agents understand schema context (https://docs.cloud.google.com/bigquery/docs/data-insights#generate-column-table-descriptions)
   * Automated Profiling of Data: Scans data to identify statistical distributions and potential anomalies, providing agents with "grounding" context regarding data health (https://docs.cloud.google.com/dataplex/docs/data-profiling-overview)
   * Knowledge Catalog (Dataplex): The unified repository for metadata, providing agents with a semantic map of the entire data estate (https://docs.cloud.google.com/dataplex/docs/catalog-overview#catalog-model)
   * BigLake Unified Storage: Enables agents to interact with data in open formats (like Iceberg or Parquet) across multi-cloud environments with unified security (https://cloud.google.com/bigquery/docs/biglake-intro)

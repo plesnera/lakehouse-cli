@@ -1,0 +1,69 @@
+table_id: audience_profile
+display_name: Audience Profiles (Panel Model)
+description: >
+  Modelled audience segments derived from panel survey data and behavioural signals.
+  Each row represents a distinct addressable audience cohort characterised by
+  demographics, interests, brand affinity scores, and channel over-index scores.
+  The 'hem' column is a SHA-256 hashed email populated for ~60% of records to reflect
+  realistic consent rates. The lat/lon and location_lat/location_lon columns carry
+  identical centroid values — the duplication is intentional to demonstrate Dataplex
+  semantic graph synonym resolution.
+
+tags:
+  business_owner: Marketing Data Products
+  data_domain: audience
+  pii_class: pseudonymous
+  refresh_cadence: daily
+  row_count_approx: 8000
+  marketing_usecases: audience_discovery,audience_performance_prediction
+
+columns:
+  - name: audience_id
+    description: Surrogate primary key (UUID v4). Stable across refreshes.
+  - name: segment_name
+    description: Human-readable cohort label used in campaign planning tools.
+  - name: country_code
+    description: ISO 3166-1 alpha-2 country code for the participant's location.
+  - name: region
+    description: State, province, or administrative region within the country.
+  - name: age_band
+    description: Age range category (e.g., 18-24, 25-34, 35-44, 45-54, 55+).
+  - name: gender
+    description: Participant's gender identity (M / F / NB / Unknown).
+  - name: income_band
+    description: Household income range category (Low / Mid / High).
+  - name: interests
+    description: IAB interest taxonomy labels for this audience cohort.
+  - name: brand_affinity_scores
+    description: MAP of brand → affinity score [0,1]. Higher = stronger affinity.
+  - name: channel_index
+    description: MAP of channel → over-index ratio vs population. >1 = over-indexes.
+  - name: hem
+    description: "SHA-256 of normalised email. ~60% populated. Canonical glossary term: Hashed Email / HEM."
+  - name: lat
+    description: "Centroid latitude of dominant geo cluster. Synonym: location_lat (same table)."
+  - name: lon
+    description: "Centroid longitude. Synonym: location_lon (same table)."
+  - name: location_lat
+    description: Synonym for lat. Duplicate column to demonstrate semantic synonym resolution.
+    synonym_of: lat
+  - name: location_lon
+    description: Synonym for lon. Duplicate column to demonstrate semantic synonym resolution.
+    synonym_of: lon
+  - name: panel_weight
+    description: Statistical projection weight. Use when scaling segment counts to population estimates.
+  - name: created_at
+    description: Record creation timestamp.
+
+data_quality_rules:
+  - column: audience_id
+    rule_type: non_null
+  - column: segment_name
+    rule_type: non_null
+  - column: hem
+    rule_type: non_null
+    threshold: 0.57
+  - column: lat
+    rule_type: non_null
+  - column: lon
+    rule_type: non_null

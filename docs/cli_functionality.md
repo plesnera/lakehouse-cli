@@ -1,4 +1,4 @@
-# Google DataPLez and BiQUery Lake accelerator CLI 
+# Google DataPlex and BigQuery Lake CLI 
 
 This project contains a collection of CLI tools that (intends) to accellerate ingestions, metadata generation and management of various 
 key componenet in the Google DataPlex and BigQuery domain.
@@ -203,8 +203,8 @@ Create template files for metadata and glossary management:
 uv run python -m ingestion.cli create-templates
 
 # This creates:
-# - metadata_descriptions/*.md files for each table
-# - business_glossaries/glossary.md with sample structure
+# - metadata/*.yaml files for each table
+# - metadata/glossary.yaml with sample structure
 ```
 
 ## 🔧 Metadata Enrichment
@@ -213,68 +213,89 @@ uv run python -m ingestion.cli create-templates
 
 To add a synonym column pair (e.g. `email_hash` as a synonym of `hem`):
 1.  Add the synonym column to your generator's schema and data dict (with `None` placeholder values)
-2.  Add the column to the metadata markdown with a `Synonym Of:` sub-bullet:
-    ```markdown
-    - email_hash: Alternative name for hashed email.
-      - Synonym Of: hem
+2.  Add the column to the metadata YAML with a `synonym_of` key:
+    ```yaml
+    columns:
+      - name: email_hash
+        description: Alternative name for hashed email.
+        synonym_of: hem
     ```
 3.  The orchestrator will automatically copy `hem` values into `email_hash` at generation time
-4.  Add the synonym relationship to `business_glossaries/glossary.md` so Dataplex creates the link:
+4.  Add the synonym relationship to `metadata/glossary.yaml` so Dataplex creates the link:
     ```markdown
     - **hashed_email**
       - Synonyms: hem, email_hash
     ```
 
-#### Defining Data Quality Rules in Markdown
+#### Defining Data Quality Rules in YAML
 Deep dive on syntax in the docs (https://docs.cloud.google.com/dataplex/docs/auto-data-quality-overview#rule-definition)
-Data quality rules are defined in the `## Data Quality Rules` section of each table's metadata markdown file.
+Data quality rules are defined in the `data_quality_rules` list of each table's metadata YAML file.
 This replaces the previous approach of hardcoded Python rules and allows DQ rules to be version-controlled
 alongside table metadata.
 
 **Rule syntax:**
-```markdown
-- column_name: rule_type [param=value ...]
+```yaml
+data_quality_rules:
+  - column: column_name
+    rule_type: rule_name
+    threshold: 0.95
+    dimension: COMPLETENESS
 ```
 
 **Supported rule types:**
 
 | Rule Type | Parameters | Example |
 |-----------|------------|---------|
-| `non_null` | `threshold` (float, default 1.0), `dimension` (str, default COMPLETENESS) | `- audience_id: non_null` |
-| `set` | `values` (comma-sep list), `dimension` (default VALIDITY) | `- status: set values=planned,active,completed,paused` |
-| `regex` | `pattern` (str), `threshold`, `dimension` | `- email: regex pattern=^[a-z]+@[a-z]+\.com` |
-| `range` | `min`, `max`, `strict_min`, `strict_max`, `threshold`, `dimension` | `- age: range min=18 max=120` |
+| `non_null` | `threshold` (float, default 1.0), `dimension` (str, default COMPLETENESS) | `rule_type: non_null` |
+| `set` | `values` (comma-sep list), `dimension` (default VALIDITY) | `rule_type: set` |
+| `regex` | `pattern` (str), `threshold`, `dimension` | `rule_type: regex` |
+| `range` | `min`, `max`, `strict_min`, `strict_max`, `threshold`, `dimension` | `rule_type: range` |
 
-**Complete example — `metadata_descriptions/campaigns.md`:**
-```markdown
-# Campaign / Flight Metadata
+**Complete example — `metadata/campaigns.yaml`:**
+```yaml
+table_id: campaigns
+display_name: Campaign / Flight Metadata
+description: >
+  Master record for advertising campaigns...
 
-Master record for advertising campaigns...
+tags:
+  business_owner: Marketing Data Products
+  data_domain: campaigns
 
-## Tags
-- business_owner: Marketing Data Products
-- data_domain: campaigns
+columns:
+  - name: campaign_id
+    description: Primary key (UUID v4).
+  - name: status
+    description: "Lifecycle state: planned | active | completed | paused."
 
-## Columns
-- campaign_id: Primary key (UUID v4).
-- status: Lifecycle state: planned | active | completed | paused.
-- ...
-
-## Data Quality Rules
-- campaign_id: non_null
-- brand: non_null
-- advertiser: non_null
-- status: set values=planned,active,completed,paused dimension=VALIDITY
+data_quality_rules:
+  - column: campaign_id
+    rule_type: non_null
+  - column: brand
+    rule_type: non_null
+  - column: advertiser
+    rule_type: non_null
+  - column: status
+    rule_type: set
+    values: planned,active,completed,paused
+    dimension: VALIDITY
 ```
 
-**Example with threshold — `metadata_descriptions/audience_profile.md`:**
-```markdown
-## Data Quality Rules
-- audience_id: non_null
-- segment_name: non_null
-- hem: non_null threshold=0.57 dimension=COMPLETENESS
-- lat: non_null
-- lon: non_null
+**Example with threshold — `metadata/audience_profile.yaml`:**
+```yaml
+data_quality_rules:
+  - column: audience_id
+    rule_type: non_null
+  - column: segment_name
+    rule_type: non_null
+  - column: hem
+    rule_type: non_null
+    threshold: 0.57
+    dimension: COMPLETENESS
+  - column: lat
+    rule_type: non_null
+  - column: lon
+    rule_type: non_null
 ```
 
 The `hem` rule specifies a 57% completeness threshold (matching the ~60% populate rate
@@ -285,10 +306,10 @@ in the synthetic data, with a small margin).
 uv run python -m ingestion.cli quality --dry-run
 ```
 
-The `DataQualityManager` reads all `## Data Quality Rules` sections from `metadata_descriptions/*.md`
+The `DataQualityManager` reads all `data_quality_rules` sections from `metadata/*.yaml`
 files and converts them to Dataplex `DataQualityRule` objects at scan creation time.
 
-To add a new rule, simply edit the appropriate markdown file and re-run the quality CLI.
+To add a new rule, simply edit the appropriate YAML file and re-run the quality CLI.
 
 ####  Generate table and column descriptions to improve data discovery:
 
@@ -305,10 +326,10 @@ uv run python -m ingestion.cli enrich-metadata --table-names pixel_events
 
 ### Two Distinct Modes:
 
-#### 🔧 Mode 1: Manual Markdown Approach (Pure Manual)
+#### 🔧 Mode 1: Manual YAML Approach (Pure Manual)
 **For users who want precise control over metadata content**
 
-- **Requires**: Manual markdown files in `metadata_descriptions/`
+- **Requires**: Manual YAML files in `metadata/`
 - **Uses**: ONLY manual descriptions (no automated insights)
 - **Use Case**: When you need specific business terminology or context
 
@@ -317,12 +338,12 @@ uv run python -m ingestion.cli enrich-metadata --table-names pixel_events
 # 1. Generate templates (one-time setup)
 uv run python -m ingestion.cli create-templates
 
-# 2. Edit the markdown files in metadata_descriptions/
+# 2. Edit the YAML files in metadata/
 
 # 3. Apply manual metadata enrichment
 uv run python -m ingestion.cli enrich-metadata \
   --table-names wpp-dataproducts-lakehouse.marketing.audience \
-  --metadata-files audience.md
+  --metadata-files audience.yaml
 ```
 
 #### 🤖 Mode 2: Google Insights Only (Pure Automation)
@@ -345,7 +366,7 @@ uv run python -m ingestion.cli enrich-metadata --google-insights
 
 **Key Differences:**
 
-| Aspect | Manual Markdown Mode | Google Insights Mode |
+| Aspect | Manual YAML Mode | Google Insights Mode |
 |--------|---------------------|---------------------|
 | **Manual Files** | Required ✅ | Not Used ❌ |
 | **Automation** | Not Used ❌ | Primary ✅ |
@@ -355,7 +376,7 @@ uv run python -m ingestion.cli enrich-metadata --google-insights
 
 **When to Use Each Mode:**
 
-**Choose Manual Markdown Mode when:**
+**Choose Manual YAML Mode when:**
 - You have specific business terminology to include
 - You need precise control over descriptions
 - You want to use only manual descriptions (no automation)
@@ -422,17 +443,17 @@ accessible from any project).
 
 ## 🛡️ Data Quality
 
-Create, sync, and run Dataplex data quality scans. Rules are loaded from `metadata_descriptions/*.md`
-files (the `## Data Quality Rules` section per table), keeping DQ logic version-controlled
+Create, sync, and run Dataplex data quality scans. Rules are loaded from `metadata/*.yaml`
+files (the `data_quality_rules` list per table), keeping DQ logic version-controlled
 alongside table metadata.
 
 The data quality command provides full lifecycle management:
 
 ```bash
-# Compare markdown rules with active Dataplex rules (no changes made)
+# Compare YAML rules with active Dataplex rules (no changes made)
 uv run python -m ingestion.cli quality --check-rules
 
-# Sync rules from markdown to Dataplex without running scans
+# Sync rules from YAML to Dataplex without running scans
 uv run python -m ingestion.cli quality --sync-only
 
 # Sync rules AND run scans (default behavior)
@@ -450,10 +471,10 @@ uv run python -m ingestion.cli quality --results
 
 **Understanding the workflow:**
 
-1. **Check rules** (`--check-rules`): Compares rules in markdown files with active rules in Dataplex.
+1. **Check rules** (`--check-rules`): Compares rules in YAML files with active rules in Dataplex.
    Shows which rules would be added, removed, or changed. Makes no changes.
 
-2. **Sync only** (`--sync-only`): Updates Dataplex scans to match markdown rules.
+2. **Sync only** (`--sync-only`): Updates Dataplex scans to match YAML rules.
    Creates new scans if needed, updates existing ones if rules differ. Does NOT run scans.
 
 3. **Sync and run** (default): Syncs rules AND triggers scan runs. This is the standard
@@ -489,8 +510,48 @@ Synchronizing data quality rules for 6 table(s)...
   ℹ️  Scan quality-audience rules are up to date (5 rules)
 ```
 
-**To add or modify rules**, edit the `## Data Quality Rules` section in the relevant
-`metadata_descriptions/<table>.md` file and re-run the quality command.
+**To add or modify rules**, edit the `data_quality_rules` list in the relevant
+`metadata/<table>.yaml` file and re-run the quality command.
+
+## 🔍 Dataset Insights
+
+Create and run Dataplex DATA_DOCUMENTATION scans at the dataset level for AI-generated
+metadata about an entire BigQuery dataset. Unlike table-level insights which target individual
+tables, dataset-level insights analyze relationships and generate cross-table metadata.
+
+Dataset insights produce:
+- AI-generated dataset description
+- Relationship graph (how tables connect)
+- Cross-table SQL sample queries
+- Discovered primary/foreign key relationships
+
+```bash
+# Create and run dataset insights scan (default behavior)
+uv run python -m ingestion.cli dataset-insights
+
+# Preview scan without executing
+uv run python -m ingestion.cli dataset-insights --dry-run
+
+# Get latest insights results
+uv run python -m ingestion.cli dataset-insights --results
+
+# Explicitly trigger scan creation and execution
+uv run python -m ingestion.cli dataset-insights --run
+
+# Wait up to 5 minutes for results (default: 10 minutes)
+uv run python -m ingestion.cli dataset-insights --results --timeout 300
+```
+
+**Resource targeting:**
+- Dataset-level scan targets: `//bigquery.googleapis.com/projects/{project}/datasets/{dataset}`
+- Scan ID format: `dataset-insights-{namespace}` (fixed, reusable)
+
+**Results structure:**
+- `description`: AI-generated dataset description
+- `relationship_graph`: Nodes and edges showing table relationships
+- `sample_queries`: Cross-table SQL query examples
+- `discovered_primary_keys`: Table primary key discoveries
+- `discovered_foreign_keys`: Cross-table foreign key relationships
 
 ## 🚀 Advanced Features
 
@@ -536,24 +597,61 @@ Tear down all generated resources for a clean re-run:
 # Reset all marketing lakehouse resources (requires --confirm)
 uv run python -m ingestion.cli reset --confirm
 
-# This deletes: BQ external tables, Dataplex entries/tags, glossary resources, Iceberg catalog
+# This deletes: Lakehouse REST catalog, BQ external tables, Dataplex entries/tags, glossary resources, Iceberg catalog
 # Does NOT delete GCS data by default
 ```
+
+### Lakehouse REST Catalog Setup
+The Lakehouse REST Catalog provides a single source of truth for Iceberg metadata, enabling BigQuery, Spark, and Trino to discover tables via the same REST endpoint.
+
+```bash
+# 1. Create namespace and register tables via CLI
+#    (catalog must exist before running setup-catalog)
+uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full
+```
+
+**Creating the Catalog:**
+
+Catalogs using **vended-credentials** mode must be created via the **GCP Console**.
+gcloud does not properly support the `X-Iceberg-Access-Delegation: vended-credentials` header required for table registration.
+
+Navigate to: **BigLake > Iceberg catalogs > Create catalog**
+
+For more details, see the official documentation:
+https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#process
+
+**Credential Modes:**
+- `vended-credentials` (recommended for enterprise): Short-lived GCS tokens, no direct bucket access needed
+- `end-user`: Users need direct GCS permissions
+
+**Table Registration:**
+The CLI automatically registers tables via **Dataproc Serverless (Managed Service for Apache Spark)**,
+which properly handles the `X-Iceberg-Access-Delegation: vended-credentials` header.
+No manual steps are required — `setup-catalog --full` submits a PySpark batch job that
+registers all existing Iceberg tables using the `register_table` system procedure.
+
+**Key features:**
+- Credential vending enables fine-grained access without users needing direct GCS permissions
+- Tables accessible via BigQuery four-part name: `project.catalog.namespace.table`
+- Spark/Trino can discover tables via the same REST endpoint
 
 ## 📊 Data Consumption & Analysis
 
 Once the ingestion is complete, data is accessible through several interfaces:
 
-### 1. BigQuery (BigLake)
-The tables are registered as **BigLake External Tables** in the `marketing` dataset. You can query them directly using standard SQL:
+### 1. BigQuery (Iceberg REST Catalog)
+The tables are registered via the **Lakehouse REST Catalog** (Iceberg) which serves as a single source of truth. BigQuery accesses tables via four-part name:
+
 ```sql
 -- Join transactions and cookies via the semantic synonym 'hem'
 SELECT t.merchant_name, c.device_type, SUM(t.amount_usd) as revenue
-FROM `wpp-dataproducts-lakehouse.marketing.transactions` t
-JOIN `wpp-dataproducts-lakehouse.marketing.cookie_registry` c 
+FROM `project.marketing-lakehouse.marketing.transactions` t
+JOIN `project.marketing-lakehouse.marketing.cookie_registry` c
   ON t.hem = c.hashed_email
 GROUP BY 1, 2;
 ```
+
+**Note:** The `marketing-lakehouse` catalog name is separate from the GCS bucket and enables Spark/Trino access via the same REST endpoint.
 
 ### 2. Dataplex Search & Glossary
 *   **Business Glossary**: Navigate the `marketing-glossary` to find definitions for terms like "ROAS" or "HEM".
@@ -588,15 +686,15 @@ The ingestion module contains the following classes that handle data ingestion a
 
 ### Data Writing & Registration
 - **`IcebergWriter`** (`ingestion/iceberg_writer.py`): Writes data to Iceberg tables in GCS
-- **`BigLakeRegistrar`** (`ingestion/bq_external.py`): Registers BigLake external tables in BigQuery
+- **`LakehouseCatalogManager`** (`ingestion/lakehouse_catalog.py`): Manages Google Cloud Lakehouse REST Catalog for Iceberg metadata, providing a single source of truth for BigQuery, Spark, and Trino table discovery
 - **`DataplexManager`** (`ingestion/dataplex_lake.py`): Manages Dataplex lake topology and asset registration
 - **`CatalogManager`** (`ingestion/catalog.py`): Creates and manages Dataplex catalog entries
 
 ### Metadata & Governance
-- **`TagWriter`** (`ingestion/tag_writer.py`): Applies Dataplex tags to tables based on markdown metadata
+- **`TagWriter`** (`ingestion/tag_writer.py`): Applies Dataplex tags to tables based on YAML metadata
 - **`GlossaryWriter`** (`ingestion/glossary_writer.py`): Legacy wrapper for glossary operations (delegates to BusinessGlossaryManager)
 - **`BusinessGlossaryManager`** (`ingestion/glossary_manager.py`): Manages Dataplex business glossary creation and term linking
-- **`HybridMetadataEnricher`** (`ingestion/bq_metadata_hybrid.py`): Enriches tables with pure metadata (manual OR Google Insights, not combined)
+- **`HybridMetadataEnricher`** (`ingestion/table_and_column_insights.py`): Enriches tables with pure metadata (manual OR Google Insights, not combined)
 
 ### Data Quality & Analysis
 - **`DataProfilingManager`** (`ingestion/data_profiling.py`): Creates and runs Dataplex data profile scans for statistical analysis (row counts, distributions, patterns)

@@ -16,11 +16,11 @@ class GlossaryWriter:
         self._manager = BusinessGlossaryManager(config)
 
     def create_glossary(self):
-        """Create the glossary from the default markdown template."""
+        """Create the glossary from the default YAML template."""
         try:
             self._manager.create_glossary_from_markdown()
         except FileNotFoundError:
-            print("ℹ️  No glossary markdown found. Run 'create-templates' first.")
+            print("ℹ️  No glossary YAML found. Run 'create-templates' first.")
 
     def create_terms(self):
         """No-op — terms are created as part of create_glossary_from_markdown."""

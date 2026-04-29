@@ -67,8 +67,8 @@ class TagWriter:
     def apply_tags(self):
         """Apply marketing_table_metadata aspect to each table entry.
 
-        Tag values are read from the ``## Tags`` section of each table's
-        markdown file in ``metadata_descriptions/``.  Edit those files to
+        Tag values are read from the ``tags`` section of each table's
+        YAML file in ``metadata/``.  Edit those files to
         change what gets applied to Dataplex entries.
         """
         parent = self.config.resource_parent

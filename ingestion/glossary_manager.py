@@ -2,7 +2,7 @@
 Business Glossary Manager — Dataplex Glossary REST API client.
 https://docs.cloud.google.com/dataplex/docs/manage-glossaries
 
-Parses a markdown glossary definition file and upserts:
+Parses a YAML glossary definition file and upserts:
   • Glossary          → POST /v1/.../glossaries
   • Categories        → POST /v1/.../glossaries/{id}/categories
   • Terms             → POST /v1/.../glossaries/{id}/terms  (with correct parent)
@@ -18,6 +18,8 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import yaml
+
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
 
@@ -25,7 +27,7 @@ from generators.config import GeneratorConfig
 
 
 # ---------------------------------------------------------------------------
-# Markdown data model
+# Data model
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -66,7 +68,7 @@ def parse_glossary_markdown(path: str) -> GlossaryDef:
     """
     Parse a glossary markdown file into a ``GlossaryDef``.
 
-    Expected format (see ``business_glossaries/glossary.md`` for the canonical
+    Expected format (see ``metadata/glossary.yaml`` for the canonical
     example):
 
         # <Glossary Display Name>
@@ -193,14 +195,57 @@ def _slugify(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# YAML parser
+# ---------------------------------------------------------------------------
+
+def parse_glossary_yaml(path: str) -> GlossaryDef:
+    """Parse a glossary YAML file into a :class:`GlossaryDef`."""
+    with open(path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+
+    glossary_id = data.get("glossary_id") or _slugify(data.get("display_name", "marketing-business-glossary"))
+    categories: list[GlossaryCategoryDef] = []
+
+    for cat_data in data.get("categories", []):
+        terms: list[GlossaryTermDef] = []
+        for term_data in cat_data.get("terms", []):
+            terms.append(
+                GlossaryTermDef(
+                    name=term_data.get("name", _slugify(term_data.get("display_name", ""))),
+                    display_name=term_data.get("display_name", ""),
+                    description=term_data.get("description", ""),
+                    synonyms=term_data.get("synonyms", []),
+                    related=term_data.get("related", []),
+                    tables=term_data.get("tables", []),
+                    business_context=term_data.get("business_context", ""),
+                )
+            )
+        categories.append(
+            GlossaryCategoryDef(
+                name=cat_data.get("name", _slugify(cat_data.get("display_name", ""))),
+                display_name=cat_data.get("display_name", ""),
+                description=cat_data.get("description", ""),
+                terms=terms,
+            )
+        )
+
+    return GlossaryDef(
+        glossary_id=glossary_id,
+        display_name=data.get("display_name", "Marketing Business Glossary"),
+        description=data.get("description", ""),
+        categories=categories,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Manager
 # ---------------------------------------------------------------------------
 
 class BusinessGlossaryManager:
-    """Manages Dataplex Business Glossary resources from a markdown definition."""
+    """Manages Dataplex Business Glossary resources from a YAML definition."""
 
-    DEFAULT_GLOSSARY_DIR = "business_glossaries"
-    DEFAULT_GLOSSARY_FILE = "glossary.md"
+    DEFAULT_GLOSSARY_DIR = "metadata"
+    DEFAULT_GLOSSARY_FILE = "glossary.yaml"
 
     def __init__(self, config: GeneratorConfig):
         self.config = config
@@ -226,6 +271,12 @@ class BusinessGlossaryManager:
     # Public API
     # ------------------------------------------------------------------
 
+    def _parse_glossary_file(self, path: str) -> GlossaryDef:
+        """Auto-detect format (YAML or Markdown) and parse the glossary file."""
+        if path.endswith(".yaml") or path.endswith(".yml"):
+            return parse_glossary_yaml(path)
+        return parse_glossary_markdown(path)
+
     def create_glossary_from_markdown(
         self,
         input_path: Optional[str] = None,
@@ -233,7 +284,7 @@ class BusinessGlossaryManager:
     ) -> None:
         """Parse *input_path* and create/update glossary, categories, terms, and links."""
         path = self._resolve_input(input_path)
-        glossary_def = parse_glossary_markdown(path)
+        glossary_def = self._parse_glossary_file(path)
         print(f"Parsed glossary '{glossary_def.display_name}' "
               f"({sum(len(c.terms) for c in glossary_def.categories)} terms "
               f"in {len(glossary_def.categories)} categories)")
@@ -291,7 +342,7 @@ class BusinessGlossaryManager:
     def validate_glossary(self, input_path: Optional[str] = None) -> bool:
         """Validate that the glossary resources exist in Dataplex."""
         path = self._resolve_input(input_path)
-        glossary_def = parse_glossary_markdown(path)
+        glossary_def = self._parse_glossary_file(path)
 
         glossary_resource = f"{self.parent}/glossaries/{glossary_def.glossary_id}"
         ok = True
@@ -341,7 +392,7 @@ class BusinessGlossaryManager:
     def reset_glossary(self, input_path: Optional[str] = None) -> None:
         """Delete all terms, categories, and the glossary itself."""
         path = self._resolve_input(input_path)
-        glossary_def = parse_glossary_markdown(path)
+        glossary_def = self._parse_glossary_file(path)
         glossary_resource = f"{self.parent}/glossaries/{glossary_def.glossary_id}"
 
         # Delete terms first (must be empty before categories/glossary can be deleted)
@@ -380,7 +431,7 @@ class BusinessGlossaryManager:
     def apply_glossary_to_assets(self, input_path: Optional[str] = None) -> None:
         """Create definition links between glossary terms and BigQuery table columns."""
         path = self._resolve_input(input_path)
-        glossary_def = parse_glossary_markdown(path)
+        glossary_def = self._parse_glossary_file(path)
         glossary_resource = f"{self.parent}/glossaries/{glossary_def.glossary_id}"
 
         entry_group = f"{self.parent}/entryGroups/@dataplex"
@@ -622,6 +673,10 @@ class BusinessGlossaryManager:
         default = os.path.join(self.DEFAULT_GLOSSARY_DIR, self.DEFAULT_GLOSSARY_FILE)
         if os.path.exists(default):
             return default
+        # Fallback to legacy markdown
+        legacy = os.path.join(self.DEFAULT_GLOSSARY_DIR, "glossary.md")
+        if os.path.exists(legacy):
+            return legacy
         raise FileNotFoundError(
             f"No glossary file found at {default}. "
             "Run 'create-templates' first or pass --input."
@@ -644,21 +699,36 @@ class BusinessGlossaryManager:
 
     @staticmethod
     def _write_default_template(dest: str) -> None:
-        """Write a minimal glossary template when no bundled file is available."""
+        """Write a minimal glossary YAML template when no bundled file is available."""
+        template = {
+            "glossary_id": "marketing-business-glossary",
+            "display_name": "Marketing Business Glossary",
+            "description": "Standardised vocabulary for the Marketing Lakehouse data estate.",
+            "categories": [
+                {
+                    "name": "identity",
+                    "display_name": "Identity",
+                    "description": "Terms related to user and device identity resolution.",
+                    "terms": [
+                        {
+                            "name": "cookie-id",
+                            "display_name": "cookie_id",
+                            "description": "Unique identifier for a browser or device session.",
+                            "synonyms": ["visitor_id", "device_id"],
+                            "tables": ["cookie_registry", "pixel_events"],
+                            "business_context": "Identity resolution",
+                        },
+                        {
+                            "name": "hashed-email",
+                            "display_name": "hashed_email",
+                            "description": "SHA-256 hash of a normalised email address.",
+                            "synonyms": ["hem"],
+                            "tables": ["audience", "cookie_registry", "transactions"],
+                            "business_context": "Cross-channel attribution",
+                        },
+                    ],
+                }
+            ],
+        }
         with open(dest, "w", encoding="utf-8") as fh:
-            fh.write(
-                "# Marketing Business Glossary\n\n"
-                "Standardised vocabulary for the Marketing Lakehouse data estate.\n\n"
-                "## Category: Identity\n\n"
-                "Terms related to user and device identity resolution.\n\n"
-                "- **cookie_id**\n"
-                "  - Synonyms: visitor_id, device_id\n"
-                "  - Description: Unique identifier for a browser or device session.\n"
-                "  - Tables: cookie_registry, pixel_events\n"
-                "  - Business Context: Identity resolution\n\n"
-                "- **hashed_email**\n"
-                "  - Synonyms: hem\n"
-                "  - Description: SHA-256 hash of a normalised email address.\n"
-                "  - Tables: audience, cookie_registry, transactions\n"
-                "  - Business Context: Cross-channel attribution\n"
-            )
+            yaml.dump(template, fh, sort_keys=False, allow_unicode=True)

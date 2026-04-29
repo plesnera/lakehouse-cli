@@ -29,11 +29,11 @@ class TestManageGlossary:
     def test_create_with_input_path(self, mock_gm_class):
         instance = mock_gm_class.return_value
         result = runner.invoke(
-            app, ["manage-glossary", "--action", "create", "--input", "custom.md"]
+            app, ["manage-glossary", "--action", "create", "--input", "custom.yaml"]
         )
         assert result.exit_code == 0
         instance.create_glossary_from_markdown.assert_called_once_with(
-            input_path="custom.md", dry_run=False
+            input_path="custom.yaml", dry_run=False
         )
 
     @patch("ingestion.cli.BusinessGlossaryManager")

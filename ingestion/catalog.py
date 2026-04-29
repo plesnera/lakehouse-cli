@@ -30,7 +30,7 @@ class CatalogManager:
         """Register per-table catalog entries with display names and descriptions.
 
         Display names and descriptions are read from
-        ``metadata_descriptions/*.md`` — edit those files to change what
+        ``metadata/*.yaml`` — edit those files to change what
         appears in the Dataplex Knowledge Catalog.
         """
         all_meta = load_all_table_metadata()

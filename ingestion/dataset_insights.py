@@ -1,0 +1,268 @@
+"""
+Dataset-Level Insights via Dataplex DATA_DOCUMENTATION Scans
+
+This module provides AI-generated insights for an entire BigQuery dataset, including:
+- AI-generated dataset description
+- Relationship graph (how tables connect)
+- Cross-table SQL sample queries
+- Discovered primary/foreign key relationships
+
+Uses the same Dataplex DataScan API as table-level insights but targets
+an entire dataset rather than a single table.
+"""
+
+import time
+from typing import Optional
+
+import requests
+import google.auth
+from google.auth.transport.requests import Request
+from google.cloud import bigquery
+
+from generators.config import GeneratorConfig
+
+
+class DatasetInsightsManager:
+    """
+    Manages dataset-level Dataplex DATA_DOCUMENTATION scans for AI-generated insights.
+
+    Unlike table-level insights which target individual tables, dataset-level insights
+    analyze an entire dataset to produce:
+    - AI-generated dataset description
+    - Relationship graph (how tables connect)
+    - Cross-table SQL sample queries
+    - Discovered primary/foreign key relationships
+    """
+
+    def __init__(self, config: GeneratorConfig):
+        self.config = config
+        self.client = bigquery.Client(project=config.project_id)
+        self.dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
+
+    def create_scan(self, dry_run: bool = False) -> Optional[str]:
+        """
+        Create a dataset-level DATA_DOCUMENTATION scan.
+
+        Args:
+            dry_run: If True, print scan details without creating the resource
+
+        Returns:
+            Scan ID if created successfully, None otherwise
+        """
+        try:
+            project_id = self.config.project_id
+            dataset_name = self.config.iceberg_namespace
+
+            # Get dataset location
+            dataset_ref = bigquery.DatasetReference(project=project_id, dataset_id=dataset_name)
+            dataset_obj = self.client.get_dataset(dataset_ref)
+            location = dataset_obj.location
+
+            # Fixed scan ID for dataset-level insights (reusable, not timestamped)
+            scan_id = f"dataset-insights-{dataset_name}"
+            ttl_seconds = 3600
+
+            payload = {
+                "data": {
+                    "resource": f"//bigquery.googleapis.com/projects/{project_id}/datasets/{dataset_name}"
+                },
+                "type": "DATA_DOCUMENTATION",
+                "dataDocumentationSpec": {
+                    "generationScopes": "ALL",
+                    "catalogPublishingEnabled": True
+                },
+                "executionSpec": {
+                    "trigger": {
+                        "one_time": {
+                            "ttl_after_scan_completion": {"seconds": ttl_seconds}
+                        }
+                    }
+                }
+            }
+
+            if dry_run:
+                print("👁️  Dry-run: would create dataset-level DataScan:")
+                print(f"   Scan ID: {scan_id}")
+                print(f"   Resource: //bigquery.googleapis.com/projects/{project_id}/datasets/{dataset_name}")
+                print(f"   Location: {location}")
+                print(f"   Type: DATA_DOCUMENTATION")
+                return scan_id
+
+            credentials, _ = google.auth.default()
+            auth_req = Request()
+            credentials.refresh(auth_req)
+            access_token = credentials.token
+
+            url = (
+                f"https://dataplex.googleapis.com/v1/projects/{project_id}"
+                f"/locations/{location}/dataScans?dataScanId={scan_id}"
+            )
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+
+            print(f"📡 Creating dataset-level DataScan: {scan_id}")
+            response = requests.post(url, headers=headers, json=payload)
+
+            if response.status_code != 200:
+                err = response.json().get('error', {}).get('message', response.text)
+                print(f"❌ DataScan creation failed ({response.status_code}): {err}")
+                return None
+
+            scan_data = response.json()
+            datascan_name = scan_data.get(
+                'name',
+                f"projects/{project_id}/locations/{location}/dataScans/{scan_id}"
+            )
+            print(f"✅ Dataset-level DataScan created (runs asynchronously): {datascan_name}")
+            return scan_id
+
+        except Exception as e:
+            print(f"⚠️  Failed to create dataset insights scan: {e}")
+            return None
+
+    def run_scan(self) -> bool:
+        """
+        Trigger execution of the dataset-level scan.
+
+        Returns:
+            True if scan was triggered successfully
+        """
+        try:
+            project_id = self.config.project_id
+            dataset_name = self.config.iceberg_namespace
+
+            # Get dataset location
+            dataset_ref = bigquery.DatasetReference(project=project_id, dataset_id=dataset_name)
+            dataset_obj = self.client.get_dataset(dataset_ref)
+            location = dataset_obj.location
+
+            scan_id = f"dataset-insights-{dataset_name}"
+
+            credentials, _ = google.auth.default()
+            auth_req = Request()
+            credentials.refresh(auth_req)
+            access_token = credentials.token
+
+            url = (
+                f"https://dataplex.googleapis.com/v1/projects/{project_id}"
+                f"/locations/{location}/dataScans/{scan_id}:run"
+            )
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+
+            print(f"📡 Triggering dataset insights scan execution: {scan_id}")
+            response = requests.post(url, headers=headers, json={})
+
+            if response.status_code != 200:
+                err = response.json().get('error', {}).get('message', response.text)
+                print(f"❌ Scan run trigger failed ({response.status_code}): {err}")
+                return False
+
+            print(f"✅ Scan execution triggered successfully")
+            return True
+
+        except Exception as e:
+            print(f"⚠️  Failed to trigger scan: {e}")
+            return False
+
+    def get_results(self, timeout: int = 600) -> dict:
+        """
+        Poll for and return dataset insights results.
+
+        Args:
+            timeout: Maximum seconds to wait for results
+
+        Returns:
+            Dictionary containing insights results or error status
+        """
+        try:
+            project_id = self.config.project_id
+            dataset_name = self.config.iceberg_namespace
+
+            # Get dataset location
+            dataset_ref = bigquery.DatasetReference(project=project_id, dataset_id=dataset_name)
+            dataset_obj = self.client.get_dataset(dataset_ref)
+            location = dataset_obj.location
+
+            scan_id = f"dataset-insights-{dataset_name}"
+
+            credentials, _ = google.auth.default()
+            auth_req = Request()
+            credentials.refresh(auth_req)
+            access_token = credentials.token
+
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+
+            # Poll for results
+            start_time = time.time()
+            poll_interval = 10
+
+            print(f"📊 Waiting for dataset insights results (timeout: {timeout}s)...")
+
+            while time.time() - start_time < timeout:
+                url = (
+                    f"https://dataplex.googleapis.com/v1/projects/{project_id}"
+                    f"/locations/{location}/dataScans/{scan_id}"
+                )
+                response = requests.get(url, headers=headers)
+
+                if response.status_code != 200:
+                    err = response.json().get('error', {}).get('message', response.text)
+                    print(f"❌ Failed to get scan status ({response.status_code}): {err}")
+                    return {"status": "error", "message": err}
+
+                scan_data = response.json()
+                state = scan_data.get('state', 'UNKNOWN')
+
+                if state == 'DONE':
+                    # Get results
+                    result_url = (
+                        f"https://dataplex.googleapis.com/v1/projects/{project_id}"
+                        f"/locations/{location}/dataScans/{scan_id}/readData"
+                    )
+                    result_response = requests.get(result_url, headers=headers)
+
+                    if result_response.status_code != 200:
+                        err = result_response.json().get('error', {}).get('message', result_response.text)
+                        print(f"❌ Failed to get scan results ({result_response.status_code}): {err}")
+                        return {"status": "error", "message": err}
+
+                    result_data = result_response.json()
+                    data_documentation_result = result_data.get('dataDocumentationResult', {})
+
+                    print(f"✅ Dataset insights completed successfully")
+
+                    return {
+                        "status": "success",
+                        "description": data_documentation_result.get('description', ''),
+                        "relationship_graph": data_documentation_result.get('relationshipGraph', {}),
+                        "sample_queries": data_documentation_result.get('sampleQueries', []),
+                        "primary_keys": data_documentation_result.get('discoveredPrimaryKeys', []),
+                        "foreign_keys": data_documentation_result.get('discoveredForeignKeys', [])
+                    }
+
+                elif state == 'FAILED':
+                    return {"status": "failed", "message": "Scan failed"}
+
+                else:
+                    elapsed = int(time.time() - start_time)
+                    print(f"   Scan state: {state} ({elapsed}s elapsed, {timeout - elapsed}s remaining)")
+                    time.sleep(poll_interval)
+
+            return {"status": "timeout", "message": f"Results not available after {timeout}s"}
+
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+
+if __name__ == "__main__":
+    config = GeneratorConfig()
+    mgr = DatasetInsightsManager(config)
+    mgr.create_scan()

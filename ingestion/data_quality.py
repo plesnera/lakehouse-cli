@@ -1,6 +1,6 @@
 """Dataplex Data Quality — create, sync, and run quality scans for marketing tables.
 
-Defines DQ rules (NOT NULL, match-rate bounds, referential integrity) in markdown files
+Defines DQ rules (NOT NULL, match-rate bounds, referential integrity) in YAML metadata files
 and manages them via the DataScanService API with proper rule comparison and synchronization.
 
 Ref: https://docs.cloud.google.com/dataplex/docs/data-quality-overview
@@ -119,6 +119,20 @@ class DataQualityManager:
         self.config = config
         self.client = dataplex_v1.DataScanServiceClient()
         self.parent = f"projects/{config.project_id}/locations/{config.location}"
+        self._ensure_results_dataset()
+
+    def _ensure_results_dataset(self) -> None:
+        """Create the dq-results dataset if it doesn't exist."""
+        from google.cloud import bigquery
+        bq = bigquery.Client(project=self.config.project_id)
+        dataset_id = f"{self.config.iceberg_namespace}_dq_results"
+        try:
+            bq.get_dataset(dataset_id)
+        except Exception:
+            bq.create_dataset(
+                bigquery.Dataset(f"{self.config.project_id}.{dataset_id}")
+            )
+            print(f"  ✅ Created BigQuery dataset: {dataset_id}")
 
     def _get_scan_id(self, table: str) -> str:
         """Generate deterministic scan ID for a table (no timestamp)."""
@@ -232,11 +246,25 @@ class DataQualityManager:
         rules: list[dataplex_v1.DataQualityRule]
     ) -> tuple[str, bool]:
         """Create a new data quality scan."""
+        results_table = (
+            f"//bigquery.googleapis.com/projects/{self.config.project_id}"
+            f"/datasets/{self.config.iceberg_namespace}_dq_results/tables/{table}_dq"
+        )
+        bigquery_export = dataplex_v1.DataQualitySpec.PostScanActions.BigQueryExport(
+            results_table=results_table,
+        )
+        post_scan_actions = dataplex_v1.DataQualitySpec.PostScanActions(
+            bigquery_export=bigquery_export,
+        )
+
         data_scan = dataplex_v1.DataScan(
             display_name=f"Quality — {table}",
             description=f"Data quality rules for the {table} marketing table.",
             data=dataplex_v1.DataSource(resource=bq_resource),
-            data_quality_spec=dataplex_v1.DataQualitySpec(rules=rules),
+            data_quality_spec=dataplex_v1.DataQualitySpec(
+                rules=rules,
+                post_scan_actions=post_scan_actions,
+            ),
             execution_spec=dataplex_v1.DataScan.ExecutionSpec(
                 trigger=dataplex_v1.Trigger(
                     on_demand=dataplex_v1.Trigger.OnDemand()

@@ -1,0 +1,44 @@
+table_id: creatives
+display_name: Creative / Content Asset Library
+description: >
+  Catalogue of ad creative assets linked to campaigns. Supports content performance
+  prediction by pairing asset metadata with pixel_events.creative_id. Each creative
+  belongs to exactly one campaign.
+
+tags:
+  business_owner: Marketing Data Products
+  data_domain: creatives
+  pii_class: none
+  refresh_cadence: once
+  row_count_approx: 1000
+  marketing_usecases: content_performance_prediction
+
+columns:
+  - name: creative_id
+    description: Primary key (UUID v4). Referenced by pixel_events.creative_id.
+  - name: campaign_id
+    description: FK to campaigns.campaign_id. Each creative belongs to one campaign.
+  - name: creative_name
+    description: Asset label combining brand, format, and sequence identifiers.
+  - name: format
+    description: "\"Controlled vocab: video_15s | video_30s | static_banner | carousel | stories.\""
+  - name: channel
+    description: Channel this asset is built for (meta, youtube, tiktok, display, ctv, search).
+  - name: duration_seconds
+    description: Populated for video formats only. Used to calculate VTR thresholds.
+  - name: width_px
+    description: Asset width in pixels.
+  - name: height_px
+    description: Asset height in pixels.
+  - name: brand
+    description: Advertiser brand (denormalised from campaigns for convenience).
+  - name: theme_tags
+    description: IAB-aligned creative theme labels. Supports content-based similarity queries.
+  - name: created_at
+    description: Upload timestamp for the creative asset.
+
+data_quality_rules:
+  - column: creative_id
+    rule_type: non_null
+  - column: campaign_id
+    rule_type: non_null

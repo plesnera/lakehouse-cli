@@ -1,0 +1,137 @@
+glossary_id: marketing-business-glossary
+display_name: Marketing Business Glossary
+description: >
+  Standardised vocabulary for the Marketing Lakehouse data estate.
+  This glossary enables Dataplex Knowledge Graph semantic discovery and
+  cross-channel attribution by defining canonical terms and their synonym
+  relationships.
+
+categories:
+  - name: identity
+    display_name: Identity
+    description: Terms related to user and device identity resolution.
+    terms:
+      - name: cookie-id
+        display_name: cookie_id
+        description: Unique identifier for a browser or device session. The canonical key for cross-site tracking and identity resolution within the marketing identity graph.
+        synonyms:
+          - visitor_id
+          - device_id
+        tables:
+          - cookie_registry
+          - pixel_events
+        business_context: Identity resolution
+
+      - name: hashed-email
+        display_name: hashed_email
+        description: SHA-256 hash of a normalised, lowercased email address. Privacy-preserving identifier that enables cross-channel attribution without exposing PII.
+        synonyms:
+          - hem
+        tables:
+          - audience
+          - cookie_registry
+          - transactions
+        business_context: Cross-channel attribution
+
+  - name: campaign
+    display_name: Campaign
+    description: Terms related to advertising campaigns and brand management.
+    terms:
+      - name: brand
+        display_name: brand
+        description: The advertiser brand name funding a campaign. Used as the primary commercial entity across campaign planning and reporting.
+        synonyms:
+          - advertiser
+        tables:
+          - campaigns
+        business_context: Campaign ownership
+
+      - name: country-code
+        display_name: country_code
+        description: ISO 3166-1 alpha-2 country code identifying the geographic market of a campaign, audience segment, or transaction.
+        synonyms:
+          - market
+        related:
+          - region
+        tables:
+          - campaigns
+          - audience
+          - transactions
+        business_context: Market segmentation
+
+  - name: geography
+    display_name: Geography
+    description: Terms related to geospatial and location data.
+    terms:
+      - name: lat
+        display_name: lat
+        description: WGS-84 latitude coordinate of an audience segment geographic centroid. Used for regional targeting and location-based insights.
+        synonyms:
+          - location_lat
+        tables:
+          - audience
+        business_context: Geographic targeting
+
+      - name: lon
+        display_name: lon
+        description: WGS-84 longitude coordinate of an audience segment geographic centroid. Used for regional targeting and location-based insights.
+        synonyms:
+          - location_lon
+        tables:
+          - audience
+        business_context: Geographic targeting
+
+  - name: marketing-metrics
+    display_name: Marketing Metrics
+    description: Terms related to marketing performance measurement and attribution.
+    terms:
+      - name: audience-segment
+        display_name: audience_segment
+        description: A modelled audience cohort characterised by demographics, interests, and behavioural signals. Derived from panel survey data.
+        tables:
+          - audience
+        business_context: Audience discovery and campaign targeting
+
+      - name: impression
+        display_name: impression
+        description: A single instance of an ad being served to a user. Counted via pixel_events where event_type = 'impression'.
+        related:
+          - reach
+          - frequency
+          - cpm
+        tables:
+          - pixel_events
+        business_context: Top-of-funnel awareness measurement
+
+      - name: conversion
+        display_name: conversion
+        description: A purchase transaction attributed to an ad exposure via cookie_id or hem join within an attribution window.
+        related:
+          - cvr
+          - cpa
+          - roas
+        tables:
+          - transactions
+          - pixel_events
+        business_context: Bottom-of-funnel performance measurement
+
+      - name: roas
+        display_name: roas
+        description: Return On Ad Spend. Calculated as SUM(transaction amount_usd) / actual_spend_usd. The primary efficiency metric for campaign performance.
+        related:
+          - conversion
+          - mer
+        tables:
+          - transactions
+          - campaigns
+          - pixel_events
+        business_context: Campaign efficiency and budget optimisation
+
+      - name: ltv
+        display_name: ltv
+        description: Lifetime Value. Calculated as SUM(amount_usd) per pan_token over the full transaction history. Used for long-term customer value assessment.
+        related:
+          - cac
+        tables:
+          - transactions
+        business_context: Long-term customer value and acquisition strategy

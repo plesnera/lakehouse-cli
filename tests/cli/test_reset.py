@@ -18,7 +18,8 @@ class TestResetCommand:
 
     @patch("google.cloud.bigquery.Client")
     @patch("ingestion.cli.BusinessGlossaryManager")
-    def test_without_confirm_shows_warning(self, mock_gm_class, mock_bq_client):
+    @patch("ingestion.cli.LakehouseCatalogManager")
+    def test_without_confirm_shows_warning(self, mock_lakehouse_class, mock_gm_class, mock_bq_client):
         result = runner.invoke(app, ["reset"])
         assert result.exit_code == 0
         assert "will delete" in result.stdout
@@ -28,13 +29,18 @@ class TestResetCommand:
 
     @patch("google.cloud.bigquery.Client")
     @patch("ingestion.cli.BusinessGlossaryManager")
-    def test_with_confirm_deletes_everything(self, mock_gm_class, mock_bq_client):
+    @patch("ingestion.cli.LakehouseCatalogManager")
+    def test_with_confirm_deletes_everything(self, mock_lakehouse_class, mock_gm_class, mock_bq_client):
         bq_instance = mock_bq_client.return_value
         gm_instance = mock_gm_class.return_value
+        lakehouse_instance = mock_lakehouse_class.return_value
 
         result = runner.invoke(app, ["reset", "--confirm"])
         assert result.exit_code == 0
         assert "Reset complete" in result.stdout
+
+        # Lakehouse namespace deleted (catalog itself is manual-only)
+        lakehouse_instance.delete_namespace.assert_called_once()
 
         # BQ tables deleted for all TABLES
         assert bq_instance.delete_table.call_count >= 6
@@ -44,9 +50,10 @@ class TestResetCommand:
 
     @patch("google.cloud.bigquery.Client")
     @patch("ingestion.cli.BusinessGlossaryManager")
+    @patch("ingestion.cli.LakehouseCatalogManager")
     @patch("google.cloud.dataplex_v1.CatalogServiceClient")
     def test_with_confirm_deletes_catalog_entries(
-        self, mock_catalog_class, mock_gm_class, mock_bq_client
+        self, mock_catalog_class, mock_lakehouse_class, mock_gm_class, mock_bq_client
     ):
         catalog_instance = mock_catalog_class.return_value
 
@@ -59,9 +66,10 @@ class TestResetCommand:
     @patch("os.path.exists", return_value=False)
     @patch("google.cloud.bigquery.Client")
     @patch("ingestion.cli.BusinessGlossaryManager")
+    @patch("ingestion.cli.LakehouseCatalogManager")
     @patch("google.cloud.dataplex_v1.CatalogServiceClient")
     def test_no_iceberg_catalog_file_no_error(
-        self, mock_catalog_class, mock_gm_class, mock_bq_client, mock_exists
+        self, mock_catalog_class, mock_lakehouse_class, mock_gm_class, mock_bq_client, mock_exists
     ):
         result = runner.invoke(app, ["reset", "--confirm"])
         assert result.exit_code == 0

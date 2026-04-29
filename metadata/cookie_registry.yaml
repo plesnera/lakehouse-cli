@@ -1,0 +1,59 @@
+table_id: cookie_registry
+display_name: Cookie / Device Identity Registry
+description: >
+  Maps cookie identifiers to device metadata, partial hashed email matches, and
+  audience segment assignments. Intentionally contains synonym column pairs:
+  cookie_id/visitor_id and hem/hashed_email, both with identical values, to
+  demonstrate Dataplex semantic graph resolution. ~40% of rows carry an audience_id;
+  ~35% carry a hashed email.
+
+tags:
+  business_owner: Marketing Data Products
+  data_domain: identity
+  pii_class: pseudonymous
+  refresh_cadence: daily
+  row_count_approx: 80000
+  marketing_usecases: audience_discovery,post_campaign_analysis
+
+columns:
+  - name: cookie_id
+    description: "Primary identity key. Synonyms: visitor_id (same table), device_id (same table). Glossary term: Cookie / Visitor ID."
+  - name: visitor_id
+    description: Synonym for cookie_id. Identical value. Present for semantic graph demo.
+    synonym_of: cookie_id
+  - name: device_id
+    description: Platform-native device identifier. Synonymous with cookie_id for resolution purposes.
+    synonym_of: cookie_id
+  - name: audience_id
+    description: FK to audience.audience_id. ~40% populated — not all cookies resolve to a modelled segment.
+  - name: hem
+    description: "SHA-256 hashed email. ~35% populated. Synonym: hashed_email (same table). Glossary term: Hashed Email / HEM."
+  - name: hashed_email
+    description: Semantic duplicate of hem. Different column name to demonstrate cross-table synonym resolution.
+    synonym_of: hem
+  - name: country_code
+    description: ISO 3166-1 alpha-2 observed market.
+  - name: city
+    description: Resolved city based on IP geolocation.
+  - name: lat
+    description: Last known latitude of the device.
+  - name: lon
+    description: Last known longitude of the device.
+  - name: device_type
+    description: "Device category: desktop | mobile | tablet | ctv."
+  - name: browser
+    description: "Browser or app identifier: Chrome | Safari | Firefox | App | Unknown."
+  - name: first_seen_at
+    description: Timestamp of first observation for this cookie.
+  - name: last_seen_at
+    description: Timestamp of most recent observation.
+
+data_quality_rules:
+  - column: cookie_id
+    rule_type: non_null
+  - column: audience_id
+    rule_type: non_null
+    threshold: 0.37
+  - column: hem
+    rule_type: non_null
+    threshold: 0.32

@@ -2,15 +2,16 @@ import typer
 from generators.config import GeneratorConfig, TABLES
 from generators.orchestrator import Orchestrator
 from ingestion.iceberg_writer import IcebergWriter
-from ingestion.bq_external import BigLakeRegistrar
 from ingestion.dataplex_lake import DataplexManager
 from ingestion.catalog import CatalogManager
 from ingestion.tag_writer import TagWriter
 from ingestion.glossary_writer import GlossaryWriter
-from ingestion.bq_metadata_hybrid import HybridMetadataEnricher
+from ingestion.table_and_column_insights import HybridMetadataEnricher
 from ingestion.glossary_manager import BusinessGlossaryManager
+from ingestion.lakehouse_catalog import LakehouseCatalogManager
 from ingestion.data_profiling import DataProfilingManager
 from ingestion.data_quality import DataQualityManager
+from ingestion.dataset_insights import DatasetInsightsManager
 from ingestion.vector_search import VectorSearchManager
 from ingestion.bqml_gemini import BQMLGeminiManager
 from ingestion.continuous_queries import ContinuousQueryManager
@@ -52,9 +53,11 @@ def generate(
 
 def _run_catalog(config: GeneratorConfig):
     """Internal helper to run the full cataloging process."""
-    # 1. BQ Registration (Ensures dataset exists)
-    bq = BigLakeRegistrar(config)
-    bq.register_tables()
+    # 1. Lakehouse REST Catalog (Iceberg) - replaces BigLakeRegistrar
+    lakehouse = LakehouseCatalogManager(config)
+    lakehouse.ensure_catalog()
+    lakehouse.ensure_namespace()
+    lakehouse.register_tables()
 
     # 2. Dataplex Lake Topology
     dp = DataplexManager(config)
@@ -105,10 +108,60 @@ def catalog(
 
     _run_catalog(config)
 
+
+@app.command()
+def setup_catalog(
+    catalog_name: str = typer.Option(..., "--catalog-name", help="Name for the Lakehouse catalog (REQUIRED - no default)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without executing"),
+    full: bool = typer.Option(False, "--full", help="Verify catalog, create namespace, and register all tables"),
+):
+    """
+    Set up the Lakehouse REST Catalog for Iceberg metadata.
+
+    The catalog must be created MANUALLY before running this command.
+    For vended-credentials mode, use the GCP Console (gcloud does not support
+    the required X-Iceberg-Access-Delegation header):
+      https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#process
+
+    This command then:
+    1. Verifies the catalog exists
+    2. Creates the namespace (if missing)
+    3. Registers existing Iceberg tables
+
+    Examples:
+        # Preview what would be done
+        uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full --dry-run
+
+        # Verify catalog and register tables
+        uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full
+
+        # Verify catalog only (no namespace/tables)
+        uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse
+    """
+    config = GeneratorConfig()
+
+    # Apply catalog name if provided
+    if catalog_name:
+        config.lakehouse_catalog_name = catalog_name
+
+    lakehouse = LakehouseCatalogManager(config)
+
+    # First verify catalog exists (user must create manually)
+    result = lakehouse.ensure_catalog(dry_run=dry_run)
+    if not result.get("catalog_exists", False):
+        print("❌ Catalog does not exist. Create it manually first.")
+        return
+
+    if full:
+        # Create namespace + register tables
+        lakehouse.ensure_namespace(dry_run=dry_run)
+        lakehouse.register_tables(dry_run=dry_run)
+
+
 @app.command()
 def enrich_metadata(
     table_names: str = typer.Option(None, help="Comma-separated list of table names in format project_id.dataset_id.table_id (e.g., 'wpp-dataproducts-lakehouse.marketing.audience')"),
-    metadata_files: str = typer.Option(None, help="Comma-separated list of metadata files to use (e.g., 'audience.md,campaigns.md'). Must match table_names in order"),
+    metadata_files: str = typer.Option(None, help="Comma-separated list of metadata files to use (e.g., 'audience.yaml,campaigns.yaml'). Must match table_names in order"),
     google_insights: bool = typer.Option(False, help="Use Google-style automated insights instead of manual markdown files"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview metadata changes without applying them to BigQuery")
 ):
@@ -116,34 +169,34 @@ def enrich_metadata(
     Generate and apply table/column descriptions using hybrid or Google-only approach.
     
     This command offers two modes:
-    1. Manual : Use manual markdown instead of Google Insights
+    1. Manual : Use manual YAML metadata files instead of Google Insights
     2. Google Insights Only: Use pure Google Dataplex-style automated metadata generation
     
     Examples:
-        # Mode 1: Manual approach (
-        # Enrich all tables (uses default markdown files if they exist)
+        # Mode 1: Manual approach
+        # Enrich all tables (uses default YAML files if they exist)
         uv run python -m ingestion.cli enrich-metadata
 
-        #You can use the automated google insights as a starting point by running and then copy-paste in to markdown
+        # You can use the automated google insights as a starting point by running and then copy-paste in to YAML
         # Enrich specific tables with manual files
         uv run python -m ingestion.cli enrich-metadata \\
           --table-names wpp-dataproducts-lakehouse.marketing.audience,wpp-dataproducts-lakehouse.marketing.campaigns \\
-          --metadata-files audience.md,campaigns.md
-        
+          --metadata-files audience.yaml,campaigns.yaml
+
         # Mode 2: Google insights only (no manual files needed)
         # Enrich specific tables with pure Google insights
         uv run python -m ingestion.cli enrich-metadata \\
           --table-names wpp-dataproducts-lakehouse.marketing.campaigns \\
           --google-insights
-        
+
         # Enrich all tables with pure Google insights
         uv run python -m ingestion.cli enrich-metadata --google-insights
-        
+
         # Preview changes without applying (dry-run mode)
         uv run python -m ingestion.cli enrich-metadata --dry-run
         uv run python -m ingestion.cli enrich-metadata --table-names campaigns --google-insights --dry-run
-        
-        # Create markdown templates for manual descriptions
+
+        # Create YAML metadata templates for manual descriptions
         uv run python -m ingestion.cli create-templates
     """
     config = GeneratorConfig()
@@ -165,7 +218,7 @@ def enrich_metadata(
             # Validate that metadata files are provided when table names are specified
             if not metadata_files:
                 print("❌ Error: When specifying table names without --google-insights, you must provide metadata files using --metadata-files")
-                print("Example: --table-names audience,campaigns --metadata-files audience.md,campaigns.md")
+                print("Example: --table-names audience,campaigns --metadata-files audience.yaml,campaigns.yaml")
                 print("Or use: --table-names audience --google-insights")
                 return
             
@@ -214,12 +267,12 @@ def create_templates():
 @app.command()
 def manage_glossary(
     action: str = typer.Option("create", help="Action to perform: create, validate, apply, or reset"),
-    input: str = typer.Option(None, "--input", help="Path to glossary markdown file (default: business_glossaries/glossary.md)"),
+    input: str = typer.Option(None, "--input", help="Path to glossary YAML file (default: metadata/glossary.yaml)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Parse and print the plan without creating any Dataplex resources"),
     reset: bool = typer.Option(False, "--reset", help="Delete all glossary resources before creating (use with action=create)"),
 ):
     """
-    Manage Dataplex business glossaries from markdown files.
+    Manage Dataplex business glossaries from YAML files.
 
     This command creates and manages semantic synonym glossaries in Dataplex
     using the dedicated Glossary API (glossaries, categories, terms, and
@@ -233,7 +286,7 @@ def manage_glossary(
         uv run python -m ingestion.cli manage-glossary --action create
 
         # Create from a custom file
-        uv run python -m ingestion.cli manage-glossary --action create --input my_glossary.md
+        uv run python -m ingestion.cli manage-glossary --action create --input my_glossary.yaml
 
         # Reset and recreate
         uv run python -m ingestion.cli manage-glossary --action create --reset
@@ -370,6 +423,45 @@ def validate(local: bool = True):
 
 
 @app.command()
+def dataset_insights(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview scan creation without executing"),
+    results: bool = typer.Option(False, "--results", help="Show latest insights results"),
+    run: bool = typer.Option(False, "--run", help="Run the dataset insights scan"),
+    timeout: int = typer.Option(600, "--timeout", help="Seconds to wait for results"),
+):
+    """Create and run Dataplex dataset-level insights scans for AI-generated metadata.
+
+    Dataset-level insights analyze an entire BigQuery dataset to produce:
+    - AI-generated dataset description
+    - Relationship graph (how tables connect)
+    - Cross-table SQL sample queries
+    - Discovered primary/foreign key relationships
+
+    Examples:
+        # Create and run scan (default behavior)
+        uv run python -m ingestion.cli dataset-insights
+
+        # Preview scan without executing
+        uv run python -m ingestion.cli dataset-insights --dry-run
+
+        # Get latest results
+        uv run python -m ingestion.cli dataset-insights --results
+
+        # Explicitly run scan
+        uv run python -m ingestion.cli dataset-insights --run
+    """
+    config = GeneratorConfig()
+    mgr = DatasetInsightsManager(config)
+
+    if results:
+        mgr.get_results(timeout=timeout)
+    else:
+        scan_id = mgr.create_scan(dry_run=dry_run)
+        if scan_id and not dry_run:
+            mgr.run_scan()
+
+
+@app.command()
 def profile(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print plan without creating scans"),
     results: bool = typer.Option(False, "--results", help="Show latest profiling results instead of creating scans"),
@@ -477,8 +569,8 @@ def reset(
 ):
     """Tear down all generated resources for a clean re-run.
 
-    Deletes: BQ external tables, Dataplex entries/tags, glossary resources,
-    and Iceberg catalog entries. Does NOT delete GCS data by default.
+    Deletes: Lakehouse REST catalog, BQ external tables, Dataplex entries/tags,
+    glossary resources, and Iceberg catalog entries. Does NOT delete GCS data.
     """
     if not confirm:
         print("⚠️  This will delete all marketing lakehouse resources.")
@@ -488,7 +580,19 @@ def reset(
     config = GeneratorConfig()
     from google.cloud import bigquery
 
-    # 1. Delete BQ external tables
+    # 1. Delete Lakehouse namespace (catalog itself must be deleted manually)
+    print("Deleting Lakehouse namespace...")
+    lakehouse = LakehouseCatalogManager(config)
+    try:
+        lakehouse.delete_namespace()
+    except Exception as e:
+        print(f"  ⚠️  Lakehouse namespace reset: {e}")
+
+    # Note: The catalog itself must be deleted manually via:
+    #   gcloud biglake iceberg catalogs delete <name> --project=<project>
+    print("  (Catalog not deleted - remove manually if needed)")
+
+    # 2. Delete BQ external tables
     print("Deleting BigQuery external tables...")
     bq_client = bigquery.Client(project=config.project_id)
     dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
@@ -497,7 +601,7 @@ def reset(
         bq_client.delete_table(table_id, not_found_ok=True)
         print(f"  Deleted BQ table: {name}")
 
-    # 2. Reset glossary
+    # 3. Reset glossary
     print("Resetting glossary...")
     glossary_mgr = BusinessGlossaryManager(config)
     try:
@@ -505,7 +609,7 @@ def reset(
     except Exception as e:
         print(f"  ⚠️  Glossary reset: {e}")
 
-    # 3. Delete catalog entries
+    # 4. Delete catalog entries
     print("Deleting catalog entries...")
     from google.cloud import dataplex_v1
     catalog_client = dataplex_v1.CatalogServiceClient()
@@ -516,7 +620,7 @@ def reset(
         except Exception:
             pass
 
-    # 4. Reset local Iceberg catalog
+    # 5. Reset local Iceberg catalog
     if os.path.exists("iceberg_catalog.db"):
         os.remove("iceberg_catalog.db")
         print("  Deleted local Iceberg catalog")

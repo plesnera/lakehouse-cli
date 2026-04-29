@@ -43,10 +43,10 @@ class HybridMetadataEnricher:
         self.config = config
         self.client = bigquery.Client(project=config.project_id)
         self.dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
-        self.markdown_dir = "metadata_descriptions"
+        self.metadata_dir = "metadata"
 
-        # Ensure markdown directory exists
-        os.makedirs(self.markdown_dir, exist_ok=True)
+        # Ensure metadata directory exists
+        os.makedirs(self.metadata_dir, exist_ok=True)
 
     def _generate_descriptions_core(self, table_names: List[str], metadata_files: Optional[List[str]] = None,
                                    use_google_insights: bool = True, dry_run: bool = False):
@@ -187,7 +187,7 @@ class HybridMetadataEnricher:
 
     def _load_manual_descriptions(self, table_ref: str, metadata_file: str = None) -> Tuple[str, Dict[str, str]]:
         """
-        Load manual descriptions from markdown file.
+        Load manual descriptions from YAML metadata file.
 
         Args:
             table_ref: Full table reference (project.dataset.table) or just table name
@@ -196,6 +196,8 @@ class HybridMetadataEnricher:
         Returns:
             Tuple of (table_description, column_descriptions_dict)
         """
+        import yaml
+
         # Extract table name from full reference
         if '.' in table_ref and table_ref.count('.') >= 2:
             # Full format: project.dataset.table -> extract table name
@@ -208,73 +210,36 @@ class HybridMetadataEnricher:
 
         if metadata_file:
             # Use explicit file path
-            markdown_file = metadata_file
+            metadata_file_path = metadata_file
             if not os.path.isabs(metadata_file):
-                # If relative path, try both current directory and metadata_descriptions directory
-                markdown_file = os.path.join(os.getcwd(), metadata_file)
-                if not os.path.exists(markdown_file):
-                    # Try in metadata_descriptions directory
-                    markdown_file = os.path.join(self.markdown_dir, metadata_file)
+                # If relative path, try both current directory and metadata directory
+                metadata_file_path = os.path.join(os.getcwd(), metadata_file)
+                if not os.path.exists(metadata_file_path):
+                    # Try in metadata directory
+                    metadata_file_path = os.path.join(self.metadata_dir, metadata_file)
 
 
         else:
             # Use default location
-            markdown_file = os.path.join(self.markdown_dir, f"{table_id}.md")
+            metadata_file_path = os.path.join(self.metadata_dir, f"{table_id}.yaml")
 
         # Default empty descriptions
         table_description = ""
         column_descriptions = {}
 
-        if os.path.exists(markdown_file):
+        if os.path.exists(metadata_file_path):
             try:
-                with open(markdown_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
+                with open(metadata_file_path, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
 
-                # Parse markdown content
-                lines = content.split('\n')
+                table_description = data.get("description", "").strip()
 
-                # Extract table description (first non-header paragraph)
-                table_description = ""
-                in_description = False
-
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    # Skip header lines
-                    if line.startswith('# '):
-                        continue
-
-                    # Stop at section headers
-                    if line.startswith('## ') or line.startswith('### '):
-                        break
-
-                    # Collect description lines
-                    if line:
-                        if table_description:
-                            table_description += " " + line
-                        else:
-                            table_description = line
-
-                # Extract column descriptions (bullet points)
-                in_columns_section = False
-                for line in lines[1:]:
-                    line = line.strip()
-                    if line.startswith('## Columns') or line.startswith('### Columns'):
-                        in_columns_section = True
-                        continue
-                    elif line.startswith('## ') or line.startswith('### '):
-                        in_columns_section = False
-                        continue
-
-                    if in_columns_section and line.startswith('- '):
-                        # Parse column description: - column_name: description
-                        parts = line[2:].split(':', 1)
-                        if len(parts) == 2:
-                            column_name = parts[0].strip()
-                            description = parts[1].strip()
-                            column_descriptions[column_name] = description
+                # Extract column descriptions from structured YAML
+                for col_data in (data.get("columns") or []):
+                    col_name = col_data.get("name", "")
+                    col_desc = col_data.get("description", "")
+                    if col_name:
+                        column_descriptions[col_name] = col_desc
 
             except Exception as e:
                 print(f"⚠️  Failed to parse manual descriptions for {table_id}: {e}")
@@ -488,35 +453,48 @@ class HybridMetadataEnricher:
         except Exception as e:
             print(f"  ❌ Failed to update metadata for {table_ref}: {e}")
 
-    def create_template_markdown(self, table_id: str):
+    def create_template_metadata(self, table_id: str):
         """
-        Create a template markdown file for manual descriptions.
+        Create a template YAML metadata file for manual descriptions.
 
         Args:
             table_id: Table name
         """
-        markdown_file = os.path.join(self.markdown_dir, f"{table_id}.md")
+        metadata_file = os.path.join(self.metadata_dir, f"{table_id}.yaml")
 
-        if os.path.exists(markdown_file):
-            print(f"⚠️  Markdown file already exists: {markdown_file}")
+        if os.path.exists(metadata_file):
+            print(f"⚠️  Metadata file already exists: {metadata_file}")
             return
 
         try:
             table_ref = f"{self.dataset_id}.{table_id}"
             table_obj = self.client.get_table(table_ref)
 
-            with open(markdown_file, 'w', encoding='utf-8') as f:
-                f.write(f"# {table_id}\n\n")
-                f.write(f"<!-- Provide a high-level description of this table's purpose and content -->\n")
-                f.write(f"This table contains...\n\n")
-                f.write(f"## Columns\n\n")
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                f.write(f"table_id: {table_id}\n")
+                f.write(f"display_name: {table_id}\n")
+                f.write(f"description: >\n")
+                f.write(f"  Describe what this table contains and its purpose.\n\n")
+                f.write(f"tags:\n")
+                f.write(f"  business_owner: Marketing Data Products\n")
+                f.write(f"  data_domain: audience\n")
+                f.write(f"  pii_class: none\n")
+                f.write(f"  refresh_cadence: daily\n")
+                f.write(f"  row_count_approx: 0\n")
+                f.write(f"  marketing_usecases: audience_discovery\n\n")
+                f.write(f"columns:\n")
 
                 for field in table_obj.schema:
                     column_name = field.name
                     column_type = field.field_type
-                    f.write(f"- {column_name}: <!-- Describe what this column represents -->\n")
+                    f.write(f"  - name: {column_name}\n")
+                    f.write(f"    description: Describe what this column represents.\n")
 
-            print(f"✅ Created template markdown file: {markdown_file}")
+                f.write(f"\ndata_quality_rules:\n")
+                f.write(f"  - column: {table_obj.schema[0].name if table_obj.schema else 'id'}\n")
+                f.write(f"    rule_type: non_null\n")
+
+            print(f"✅ Created template metadata file: {metadata_file}")
             print(f"   Edit this file to provide manual descriptions, then run enrichment.")
 
         except Exception as e:
@@ -524,14 +502,14 @@ class HybridMetadataEnricher:
 
     def create_all_templates(self):
         """
-        Create template markdown files for all tables.
+        Create template YAML metadata files for all tables.
         """
-        print("Creating markdown templates for all tables...")
+        print("Creating metadata templates for all tables...")
 
         tables = self.client.list_tables(self.dataset_id)
 
         for table in tables:
-            self.create_template_markdown(table.table_id)
+            self.create_template_metadata(table.table_id)
 
         print("Template creation complete!")
 

@@ -1,0 +1,60 @@
+table_id: transactions
+display_name: Transactional Purchase Feed (Mastercard-style)
+description: >
+  Synthetic purchase transaction feed modelled on Mastercard merchant data. Represents
+  purchase events that may or may not link to an ad exposure via cookie_id or hem.
+  cookie_id is populated at market-specific rates (US: 30%, UK: 20%, JP: 15%);
+  hem at (US: 25%, UK: 15%, JP: 10%). The pan_token is a tokenised non-reversible
+  payment card reference used for LTV and CAC calculations. Partitioned by date.
+
+tags:
+  business_owner: Marketing Data Products
+  data_domain: transactions
+  pii_class: pseudonymous
+  refresh_cadence: daily
+  row_count_approx: 500000
+  marketing_usecases: post_campaign_analysis,audience_discovery
+
+columns:
+  - name: txn_id
+    description: Primary key (UUID v4) for each transaction.
+  - name: pan_token
+    description: Non-reversible tokenised PAN. Always populated. Used for LTV aggregation. Does NOT link to real card data.
+  - name: cookie_id
+    description: FK to cookie_registry. Market-specific fill rates (US 30%, UK 20%, JP 15%). Join via hem as fallback.
+  - name: hem
+    description: "SHA-256 hashed email. Market-specific fill rates (US 25%, UK 15%, JP 10%). Glossary term: Hashed Email / HEM."
+  - name: merchant_name
+    description: Name of the merchant where the transaction occurred.
+  - name: merchant_category_code
+    description: ISO-18245 MCC. 4-digit string. Use for product-category conversion analysis.
+  - name: brand
+    description: Resolved brand from merchant (may be null).
+  - name: amount_usd
+    description: Transaction value in USD. Use SUM for revenue in ROAS and MER calculations.
+  - name: currency_code
+    description: ISO-4217 currency code.
+  - name: country_code
+    description: ISO 3166-1 alpha-2 country where the transaction occurred.
+  - name: city
+    description: City where the transaction occurred.
+  - name: lat
+    description: Merchant latitude.
+  - name: lon
+    description: Merchant longitude.
+  - name: channel
+    description: "Transaction channel: in_store | online | contactless."
+  - name: txn_ts
+    description: Timestamp when the transaction occurred.
+  - name: event_date
+    description: Date of the transaction (derived from txn_ts).
+  - name: partition_date
+    description: Iceberg partition key (day). Always filter on this column for time-range queries.
+
+data_quality_rules:
+  - column: txn_id
+    rule_type: non_null
+  - column: pan_token
+    rule_type: non_null
+  - column: amount_usd
+    rule_type: non_null

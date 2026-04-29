@@ -77,7 +77,7 @@ The agent relies on these metadata layers (all set up by the ingestion pipeline)
   pii_class, refresh_cadence, row_count_approx (`tag_writer.py`)
 - **Business Glossary** with synonym links: cookie_id↔visitor_id,
   hem↔hashed_email, brand↔advertiser, lat↔location_lat (`glossary_manager.py`)
-- **Column descriptions** from `metadata_descriptions/*.md` applied via
+- **Column descriptions** from `metadata/*.yaml` applied via
   `enrich-metadata` command
 
 The richer the metadata, the better the agent performs at schema discovery and

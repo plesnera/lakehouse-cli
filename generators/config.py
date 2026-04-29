@@ -11,11 +11,11 @@ class MarketMatchRates(BaseModel):
 FULL_SCALE = {
     "n_audience_participants": 1000, #8_000,
     "n_audience_segments":   65, #500,
-    "n_cookies":  1000, #80_000,
-    "n_campaigns": 25,  #200,
-    "n_creatives_per_campaign": 1, # 5,
-    "n_pixel_events": 2000, #2_000_000,
-    "n_transactions": 500, #500_000,
+    "n_cookies":  10000, #80_000,
+    "n_campaigns": 50,  #200,
+    "n_creatives_per_campaign": 5, # 5,
+    "n_pixel_events": 250000, #2_000_000,
+    "n_transactions": 65000, #500_000,
 }
 
 # Fictional brands from Agent.md
@@ -92,6 +92,12 @@ class GeneratorConfig(BaseModel):
     biglake_connection: str = Field(
         default="projects/{project_id}/locations/{location}/connections/biglake-conn",
         description="BigLake connection template with {project_id} placeholder"
+    )
+
+    # Lakehouse REST Catalog configuration
+    lakehouse_catalog_name: str = Field(
+        default="",
+        description="Lakehouse REST catalog name (REQUIRED - no default, must be explicit)"
     )
     
     # Location configuration

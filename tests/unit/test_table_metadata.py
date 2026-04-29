@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ingestion.table_metadata import (
     parse_table_metadata,
@@ -60,69 +61,84 @@ class TestParseDQRuleLine:
         assert _parse_dq_rule_line("") is None
 
 
+def _write_yaml(path: Path, data: dict) -> None:
+    path.write_text(yaml.dump(data, sort_keys=False))
+
+
 class TestParseTableMetadata:
-    """parse_table_metadata() correctly converts markdown to TableMeta."""
+    """parse_table_metadata() correctly converts YAML to TableMeta."""
 
     def test_parses_display_name(self, tmp_path: Path):
-        path = tmp_path / "audience.md"
-        path.write_text("# Audience Table\n\nDescription of audience.")
+        path = tmp_path / "audience.yaml"
+        _write_yaml(path, {
+            "table_id": "audience",
+            "display_name": "Audience Table",
+            "description": "Description of audience.",
+        })
         result = parse_table_metadata(str(path))
         assert result.display_name == "Audience Table"
         assert result.table_id == "audience"
 
     def test_parses_description(self, tmp_path: Path):
-        path = tmp_path / "campaigns.md"
-        path.write_text("# Campaigns\n\nMarketing campaign data.")
+        path = tmp_path / "campaigns.yaml"
+        _write_yaml(path, {
+            "table_id": "campaigns",
+            "display_name": "Campaigns",
+            "description": "Marketing campaign data.",
+        })
         result = parse_table_metadata(str(path))
         assert result.description == "Marketing campaign data."
 
     def test_parses_tags(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text(
-            "# Test Table\n\n"
-            "## Tags\n"
-            "- business_owner: Marketing\n"
-            "- data_domain: audience\n"
-            "- pii_class: pseudonymous\n"
-        )
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {
+            "display_name": "Test Table",
+            "tags": {
+                "business_owner": "Marketing",
+                "data_domain": "audience",
+                "pii_class": "pseudonymous",
+            },
+        })
         result = parse_table_metadata(str(path))
         assert result.tags["business_owner"] == "Marketing"
         assert result.tags["data_domain"] == "audience"
         assert result.tags["pii_class"] == "pseudonymous"
 
     def test_parses_columns(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text(
-            "# Test Table\n\n"
-            "## Columns\n"
-            "- audience_id: Primary key.\n"
-            "- created_at: Timestamp of creation.\n"
-        )
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {
+            "display_name": "Test Table",
+            "columns": [
+                {"name": "audience_id", "description": "Primary key."},
+                {"name": "created_at", "description": "Timestamp of creation."},
+            ],
+        })
         result = parse_table_metadata(str(path))
         assert "audience_id" in result.columns
         assert result.columns["audience_id"].description == "Primary key."
         assert result.columns["created_at"].description == "Timestamp of creation."
 
     def test_parses_synonym_columns(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text(
-            "# Test Table\n\n"
-            "## Columns\n"
-            "- lat: Centroid latitude.\n"
-            "- location_lat: Synonym for lat.\n"
-            "  - Synonym Of: lat\n"
-        )
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {
+            "display_name": "Test Table",
+            "columns": [
+                {"name": "lat", "description": "Centroid latitude."},
+                {"name": "location_lat", "description": "Synonym for lat.", "synonym_of": "lat"},
+            ],
+        })
         result = parse_table_metadata(str(path))
         assert result.columns["location_lat"].synonym_of == "lat"
 
     def test_parses_dq_rules(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text(
-            "# Test Table\n\n"
-            "## Data Quality Rules\n"
-            "- audience_id: non_null\n"
-            "- status: set values=planned,active,completed,paused\n"
-        )
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {
+            "display_name": "Test Table",
+            "data_quality_rules": [
+                {"column": "audience_id", "rule_type": "non_null"},
+                {"column": "status", "rule_type": "set", "values": ["planned", "active", "completed", "paused"]},
+            ],
+        })
         result = parse_table_metadata(str(path))
         assert len(result.dq_rules) == 2
         assert result.dq_rules[0].column == "audience_id"
@@ -131,47 +147,52 @@ class TestParseTableMetadata:
         assert result.dq_rules[1].rule_type == "set"
 
     def test_synonym_map_property(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text(
-            "# Test Table\n\n"
-            "## Columns\n"
-            "- lat: Centroid latitude.\n"
-            "- location_lat: Synonym for lat.\n"
-            "  - Synonym Of: lat\n"
-            "- lon: Centroid longitude.\n"
-        )
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {
+            "display_name": "Test Table",
+            "columns": [
+                {"name": "lat", "description": "Centroid latitude."},
+                {"name": "location_lat", "description": "Synonym for lat.", "synonym_of": "lat"},
+                {"name": "lon", "description": "Centroid longitude."},
+            ],
+        })
         result = parse_table_metadata(str(path))
         assert result.synonym_map == {"location_lat": "lat"}
 
     def test_tag_row_count_property(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text(
-            "# Test Table\n\n"
-            "## Tags\n"
-            "- row_count_approx: 8000\n"
-        )
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {
+            "display_name": "Test Table",
+            "tags": {"row_count_approx": 8000},
+        })
         result = parse_table_metadata(str(path))
         assert result.tag_row_count == 8000.0
 
     def test_tag_row_count_missing(self, tmp_path: Path):
-        path = tmp_path / "test.md"
-        path.write_text("# Test Table\n")
+        path = tmp_path / "test.yaml"
+        _write_yaml(path, {"display_name": "Test Table"})
         result = parse_table_metadata(str(path))
         assert result.tag_row_count == 0.0
 
 
 class TestLoadAllTableMetadata:
-    """load_all_table_metadata() loads and parses all .md files in a directory."""
+    """load_all_table_metadata() loads and parses all .yaml files in a directory."""
 
-    def test_loads_all_md_files(self, tmp_path: Path):
-        (tmp_path / "audience.md").write_text("# Audience\n\n## Tags\n- data_domain: audience\n")
-        (tmp_path / "campaigns.md").write_text("# Campaigns\n\n## Tags\n- data_domain: campaigns\n")
-        (tmp_path / "README.md").write_text("Not a table file.")
+    def test_loads_all_yaml_files(self, tmp_path: Path):
+        _write_yaml(tmp_path / "audience.yaml", {
+            "display_name": "Audience",
+            "tags": {"data_domain": "audience"},
+        })
+        _write_yaml(tmp_path / "campaigns.yaml", {
+            "display_name": "Campaigns",
+            "tags": {"data_domain": "campaigns"},
+        })
+        _write_yaml(tmp_path / "README.yaml", {"display_name": "Not a table"})
 
         result = load_all_table_metadata(str(tmp_path))
         assert "audience" in result
         assert "campaigns" in result
-        assert "README" in result  # all .md files are loaded
+        assert "README" in result  # all .yaml files are loaded
 
     def test_returns_empty_dict_for_empty_dir(self, tmp_path: Path):
         result = load_all_table_metadata(str(tmp_path))
