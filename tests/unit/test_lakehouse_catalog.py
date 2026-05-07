@@ -21,6 +21,7 @@ class TestLakehouseCatalogManager:
             lakehouse_catalog_name="test-catalog",
             iceberg_namespace="marketing",
             iceberg_warehouse="gs://test-bucket/iceberg",
+            subnet_name="dataproc-subnet",
         )
 
     @pytest.fixture
@@ -179,14 +180,8 @@ class TestLakehouseCatalogManager:
     # ---- register_tables tests ----
 
     @patch("subprocess.run")
-    @patch("google.cloud.storage.Client")
-    def test_register_tables_success(self, mock_storage_client, mock_run, manager):
-        """Dataproc batch succeeds — all tables registered."""
-        mock_blob = MagicMock()
-        mock_bucket = MagicMock()
-        mock_bucket.blob.return_value = mock_blob
-        mock_storage_client.return_value.bucket.return_value = mock_bucket
-
+    def test_register_tables_success(self, mock_run, manager):
+        """DataprocSparkSession succeeds — all tables registered."""
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
 
         result = manager.register_tables(dry_run=False)
@@ -194,17 +189,13 @@ class TestLakehouseCatalogManager:
         assert result == {"tables_registered": 6}
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0][0]
-        assert call_args[:5] == ["gcloud", "dataproc", "batches", "submit", "pyspark"]
+        assert call_args[:2] == ["python", "register_tables.py"]
+        assert "--project-id=test-project" in call_args
+        assert "--subnet-name=dataproc-subnet" in call_args
 
     @patch("subprocess.run")
-    @patch("google.cloud.storage.Client")
-    def test_register_tables_failure(self, mock_storage_client, mock_run, manager):
-        """Dataproc batch fails — zero tables registered."""
-        mock_blob = MagicMock()
-        mock_bucket = MagicMock()
-        mock_bucket.blob.return_value = mock_blob
-        mock_storage_client.return_value.bucket.return_value = mock_bucket
-
+    def test_register_tables_failure(self, mock_run, manager):
+        """DataprocSparkSession fails — zero tables registered."""
         mock_run.return_value = MagicMock(returncode=1, stderr="FAILED", stdout="")
 
         result = manager.register_tables(dry_run=False)
@@ -212,11 +203,48 @@ class TestLakehouseCatalogManager:
         assert result == {"tables_registered": 0}
 
     @patch("subprocess.run")
-    @patch("google.cloud.storage.Client")
-    def test_register_tables_dry_run(self, mock_storage_client, mock_run, manager):
-        """Dry run — no storage or subprocess calls."""
+    def test_register_tables_dry_run(self, mock_run, manager):
+        """Dry run — no subprocess calls."""
         result = manager.register_tables(dry_run=True)
 
         assert result == {"tables_registered": 6}
         mock_run.assert_not_called()
-        mock_storage_client.assert_not_called()
+
+    # ---- register_external_tables tests ----
+
+    @patch("subprocess.run")
+    def test_register_external_tables_success(self, mock_run, manager):
+        """DataprocSparkSession succeeds — external tables registered."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+
+        tables = {
+            "external_a": "gs://other-bucket/external_a/metadata.json",
+            "external_b": "gs://other-bucket/external_b/metadata.json",
+        }
+        result = manager.register_external_tables(tables=tables, dry_run=False)
+
+        assert result == {"tables_registered": 2}
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args[:2] == ["python", "register_tables.py"]
+        assert "--project-id=test-project" in call_args
+        assert "--subnet-name=dataproc-subnet" in call_args
+
+    @patch("subprocess.run")
+    def test_register_external_tables_failure(self, mock_run, manager):
+        """DataprocSparkSession fails — zero external tables registered."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="FAILED", stdout="")
+
+        tables = {"external_a": "gs://other-bucket/external_a/metadata.json"}
+        result = manager.register_external_tables(tables=tables, dry_run=False)
+
+        assert result == {"tables_registered": 0}
+
+    @patch("subprocess.run")
+    def test_register_external_tables_dry_run(self, mock_run, manager):
+        """Dry run — no subprocess calls."""
+        tables = {"external_a": "gs://other-bucket/external_a/metadata.json"}
+        result = manager.register_external_tables(tables=tables, dry_run=True)
+
+        assert result == {"tables_registered": 1}
+        mock_run.assert_not_called()

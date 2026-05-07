@@ -5,14 +5,11 @@ Lakehouse REST Catalog (Iceberg) Manager
 Manages Google Cloud Lakehouse REST Catalog for Iceberg metadata, providing
 a single source of truth for BigQuery, Spark, and Trino table discovery.
 
-Uses gcloud CLI for all operations since the BigLake Iceberg REST API
-has non-standard paths and authentication requirements.
-
-IMPORTANT: For vended-credentials mode, tables must be registered via
-Spark/Dataproc or GCP Console since gcloud doesn't properly support the
-required X-Iceberg-Access-Delegation header.
+Uses gcloud CLI for catalog/namespace operations and DataprocSparkSession
+for table registration.
 """
 
+import json
 import subprocess
 from typing import Dict
 
@@ -23,7 +20,8 @@ class LakehouseCatalogManager:
     """
     Manages Google Cloud Lakehouse REST Catalog operations for Iceberg tables.
 
-    Uses gcloud CLI for all operations.
+    Uses gcloud CLI for catalog/namespace operations and
+    DataprocSparkSession for table registration.
     """
 
     def __init__(self, config: GeneratorConfig):
@@ -212,143 +210,44 @@ class LakehouseCatalogManager:
         except subprocess.TimeoutExpired:
             raise RuntimeError("gcloud namespace delete timed out")
 
-    # ---- Table registration via Dataproc Serverless ----
+    # ---- Table registration via DataprocSparkSession ----
 
-    def _generate_registration_script(self) -> str:
-        """Generate a PySpark script that registers existing Iceberg tables."""
-        tables_dict = {
-            name: f"{self.warehouse}/{self.namespace}/{name}/metadata.json"
-            for name in TABLES
-        }
-
-        # Build the script using string concatenation to avoid f-string nesting
-        script = (
-            'import pyspark\n'
-            'from pyspark.context import SparkContext\n'
-            'from pyspark.sql import SparkSession\n'
-            'import sys\n'
-            
-            '\n'
-            'catalog = "' + self.catalog_name + '"\n'
-            'namespace = "' + self.namespace + '"\n'
-            'warehouse = "' + self.warehouse + '"\n'
-            'project_id = "' + self.project_id + '"\n'
-            '\n'
-            'tables = ' + repr(tables_dict) + '\n'
-            '\n'
-            'spark = SparkSession.builder \\\n'
-            '    .appName("register-iceberg-tables") \\\n'
-            '    .config("spark.sql.defaultCatalog", catalog) \\\n'
-            '    .config("spark.sql.catalog." + catalog, "org.apache.iceberg.spark.SparkCatalog") \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".type", "rest") \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".uri", "https://biglake.googleapis.com/iceberg/v1/restcatalog") \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".warehouse", warehouse) \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".io-impl", "org.apache.iceberg.gcp.gcs.GCSFileIO") \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".header.x-goog-user-project", project_id) \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".rest.auth.type", "org.apache.iceberg.gcp.auth.GoogleAuthManager") \\\n'
-            '    .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".header.X-Iceberg-Access-Delegation", "vended-credentials") \\\n'
-            '    .config("spark.sql.catalog." + catalog + ".gcs.oauth2.refresh-credentials-endpoint=https://oauth2.googleapis.com/token") \\\n'
-            '    .getOrCreate()\n'
-            '\n'
-            '# Ensure namespace exists\n'
-            'spark.sql("CREATE NAMESPACE IF NOT EXISTS `" + catalog + "`.`" + namespace + "`")\n'
-            '\n'
-            'registered = 0\n'
-            'failed = 0\n'
-            '\n'
-            'for table_name, metadata_location in tables.items():\n'
-            '    try:\n'
-            '        spark.sql(\n'
-            '            "CALL `" + catalog + "`.system.register_table("\n'
-            '            "table => \'" + namespace + "." + table_name + "\', "\n'
-            '            "metadata_file => \'" + metadata_location + "\' )"\n'
-            '        )\n'
-            '        print("Registered: " + table_name)\n'
-            '        registered += 1\n'
-            '    except Exception as e:\n'
-            '        err = str(e)\n'
-            '        if "already exists" in err.lower() or "already registered" in err.lower():\n'
-            '            print("Already registered: " + table_name)\n'
-            '            registered += 1\n'
-            '        else:\n'
-            '            print("Failed to register " + table_name + ": " + err)\n'
-            '            failed += 1\n'
-            '\n'
-            'print("Done: " + str(registered) + " registered, " + str(failed) + " failed")\n'
-            'sys.exit(0 if failed == 0 else 1)\n'
-        )
-        return script
-
-    def _upload_script_to_gcs(self, script_content: str) -> str:
-        """Upload the PySpark script to the warehouse bucket and return its GCS URI."""
-        from google.cloud import storage
-
-        bucket_name = self.warehouse.replace("gs://", "").split("/")[0]
-        blob_path = f"{self.namespace}/scripts/register_tables.py"
-        gcs_uri = f"gs://{bucket_name}/{blob_path}"
-
-        client = storage.Client(project=self.project_id)
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-        blob.upload_from_string(script_content)
-
-        return gcs_uri
-
-    def _build_spark_properties(self) -> str:
-        """Build comma-separated Spark properties for the Dataproc batch job."""
-        props = {
-            f"spark.sql.defaultCatalog": self.catalog_name,
-            f"spark.sql.catalog.{self.catalog_name}": "org.apache.iceberg.spark.SparkCatalog",
-            f"spark.sql.catalog.{self.catalog_name}.type": "rest",
-            f"spark.sql.catalog.{self.catalog_name}.uri": "https://biglake.googleapis.com/iceberg/v1/restcatalog",
-            f"spark.sql.catalog.{self.catalog_name}.warehouse": self.warehouse,
-            f"spark.sql.catalog.{self.catalog_name}.io-impl": "org.apache.iceberg.gcp.gcs.GCSFileIO",
-            f"spark.sql.catalog.{self.catalog_name}.header.x-goog-user-project": self.project_id,
-            f"spark.sql.catalog.{self.catalog_name}.rest.auth.type": "org.apache.iceberg.gcp.auth.GoogleAuthManager",
-            "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-            f"spark.sql.catalog.{self.catalog_name}.header.X-Iceberg-Access-Delegation": "vended-credentials",
-            f"spark.sql.catalog.{self.catalog_name}.gcs.oauth2.refresh-credentials-endpoint":"https://oauth2.googleapis.com/token"
-        }
-        return ",".join(f"{k}={v}" for k, v in props.items())
-
-    def register_tables(self, dry_run: bool = False) -> Dict[str, bool]:
+    def register_external_tables(
+        self, tables: Dict[str, str], dry_run: bool = False
+    ) -> Dict[str, bool]:
         """
-        Register all tables via a Dataproc Serverless batch job.
+        Register arbitrary Iceberg tables via DataprocSparkSession.
 
-        Generates a PySpark script that connects to the Lakehouse REST Catalog
-        and registers each existing Iceberg table using the
-        ``register_table`` system procedure.
+        Runs the local register_tables.py script which uses
+        DataprocSparkSession with BigQueryMetastoreCatalog.
 
-        Ref: https://docs.cloud.google.com/dataproc/docs/guides/iceberg-lakehouse-rest-catalog
+        :param tables: Mapping of table names to metadata.json GCS paths.
+        :param dry_run: Preview actions without executing.
+        :return: Dict with 'tables_registered' count.
         """
         results = {"tables_registered": 0}
 
         if dry_run:
-            for table_name in TABLES:
-                metadata_location = f"{self.warehouse}/{self.namespace}/{table_name}/metadata.json"
+            for table_name, metadata_location in tables.items():
                 print(f"[DRY RUN] Would register table: {table_name}")
                 print(f"  metadata location: {metadata_location}")
                 results["tables_registered"] += 1
             return results
 
-        # Generate and upload the PySpark script
-        script_content = self._generate_registration_script()
-        script_gcs_path = self._upload_script_to_gcs(script_content)
-        print(f"Uploaded registration script: {script_gcs_path}")
-
-        # Submit the Dataproc Serverless batch job
-        properties = self._build_spark_properties()
         cmd = [
-            "gcloud", "dataproc", "batches", "submit", "pyspark",
-            script_gcs_path,
-            f"--project={self.project_id}",
+            "python",
+            "register_tables.py",
+            f"--project-id={self.project_id}",
             f"--region={self.location}",
-            "--version=2.2",
-            f"--properties={properties}",
+            f"--subnet-name={self.config.subnet_name}",
+            f"--location={self.location}",
+            f"--catalog={self.catalog_name}",
+            f"--namespace={self.namespace}",
+            f"--warehouse={self.warehouse}",
+            f"--tables={json.dumps(tables)}",
         ]
 
-        print(f"Submitting Dataproc batch job to register {len(TABLES)} tables...")
+        print(f"Registering {len(tables)} tables via DataprocSparkSession...")
         try:
             result = subprocess.run(
                 cmd,
@@ -357,17 +256,29 @@ class LakehouseCatalogManager:
                 timeout=600,
             )
             if result.returncode == 0:
-                print(f"Dataproc batch completed: {len(TABLES)} tables registered")
-                results["tables_registered"] = len(TABLES)
+                print(f"Registration completed: {len(tables)} tables registered")
+                results["tables_registered"] = len(tables)
             else:
-                print(f"Dataproc batch failed (exit {result.returncode}):")
+                print(f"Registration failed (exit {result.returncode}):")
                 print(result.stderr)
-                # Parse output to count successes if available
                 results["tables_registered"] = 0
         except subprocess.TimeoutExpired:
-            print("Dataproc batch job timed out after 10 minutes")
+            print("Registration timed out after 10 minutes")
             results["tables_registered"] = 0
         except FileNotFoundError:
-            raise RuntimeError("gcloud CLI not available")
+            raise RuntimeError("python or register_tables.py not available")
 
         return results
+
+    def register_tables(self, dry_run: bool = False) -> Dict[str, bool]:
+        """
+        Register all built-in tables via DataprocSparkSession.
+
+        Runs register_tables.py with BigQueryMetastoreCatalog to register
+        each existing Iceberg table using the ``register_table`` system procedure.
+        """
+        tables_dict = {
+            name: f"{self.warehouse}/{self.namespace}/{name}/metadata.json"
+            for name in TABLES
+        }
+        return self.register_external_tables(tables=tables_dict, dry_run=dry_run)

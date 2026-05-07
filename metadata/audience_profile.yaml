@@ -1,4 +1,4 @@
-table_id: audience_profile
+table_id: audience
 display_name: Audience Profiles (Panel Model)
 description: >
   Modelled audience segments derived from panel survey data and behavioural signals.

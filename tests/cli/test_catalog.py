@@ -86,6 +86,56 @@ class TestCatalogCommand:
         assert call_config.iceberg_warehouse == "gs://b/iceberg"
         assert call_config.biglake_connection == "projects/p/locations/l/connections/c"
 
+    @patch("ingestion.cli._run_catalog")
+    def test_overrides_catalog_name(self, mock_run_catalog):
+        result = runner.invoke(
+            app, ["catalog", "--catalog-name", "my-catalog"]
+        )
+        assert result.exit_code == 0
+        call_config = mock_run_catalog.call_args[0][0]
+        assert call_config.lakehouse_catalog_name == "my-catalog"
+
+
+class TestRunCatalogLogic:
+    """_run_catalog internal logic — validation and early exits."""
+
+    @patch("ingestion.cli.LakehouseCatalogManager")
+    def test_bails_when_catalog_name_empty(self, mock_lakehouse_class):
+        from ingestion.cli import _run_catalog
+        from generators.config import GeneratorConfig
+
+        config = GeneratorConfig(lakehouse_catalog_name="")
+        _run_catalog(config)
+        mock_lakehouse_class.assert_not_called()
+
+    @patch("ingestion.cli.LakehouseCatalogManager")
+    def test_bails_when_catalog_does_not_exist(self, mock_lakehouse_class):
+        from ingestion.cli import _run_catalog
+        from generators.config import GeneratorConfig
+
+        lakehouse_instance = mock_lakehouse_class.return_value
+        lakehouse_instance.ensure_catalog.return_value = {"catalog_exists": False}
+
+        config = GeneratorConfig(lakehouse_catalog_name="missing-catalog")
+        _run_catalog(config)
+
+        lakehouse_instance.ensure_namespace.assert_not_called()
+        lakehouse_instance.register_tables.assert_not_called()
+
+    @patch("ingestion.cli.LakehouseCatalogManager")
+    def test_runs_full_pipeline_when_catalog_exists(self, mock_lakehouse_class):
+        from ingestion.cli import _run_catalog
+        from generators.config import GeneratorConfig
+
+        lakehouse_instance = mock_lakehouse_class.return_value
+        lakehouse_instance.ensure_catalog.return_value = {"catalog_exists": True}
+
+        config = GeneratorConfig(lakehouse_catalog_name="existing-catalog")
+        _run_catalog(config)
+
+        lakehouse_instance.ensure_namespace.assert_called_once()
+        lakehouse_instance.register_tables.assert_called_once()
+
 
 class TestIngestCommand:
     """ingest CLI command — full streamed ingestion."""
@@ -132,3 +182,17 @@ class TestIngestCommand:
     def test_success_message_printed(self, mock_run, mock_orch_class, mock_writer_class):
         result = runner.invoke(app, ["ingest"])
         assert "Ingestion complete" in result.stdout
+
+    @patch("ingestion.cli.IcebergWriter")
+    @patch("ingestion.cli.Orchestrator")
+    @patch("ingestion.cli._run_catalog")
+    def test_overrides_catalog_name(self, mock_run, mock_orch_class, mock_writer_class):
+        result = runner.invoke(
+            app, ["ingest", "--catalog-name", "my-ingest-catalog"]
+        )
+        assert result.exit_code == 0
+        orch_config = mock_orch_class.call_args[0][0]
+        assert orch_config.lakehouse_catalog_name == "my-ingest-catalog"
+        # _run_catalog receives the same config object
+        run_config = mock_run.call_args[0][0]
+        assert run_config.lakehouse_catalog_name == "my-ingest-catalog"

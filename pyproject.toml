@@ -11,6 +11,8 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-bigquery",
     "google-cloud-dataplex",
+    "google-cloud-dataproc",
+    "google-cloud-dataproc-spark-connect",
     "numpy",
     "sqlalchemy",
     "requests",

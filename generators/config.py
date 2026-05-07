@@ -9,13 +9,13 @@ class MarketMatchRates(BaseModel):
 
 # Production-scale defaults matching Agent.md spec
 FULL_SCALE = {
-    "n_audience_participants": 1000, #8_000,
-    "n_audience_segments":   65, #500,
-    "n_cookies":  10000, #80_000,
-    "n_campaigns": 50,  #200,
-    "n_creatives_per_campaign": 5, # 5,
-    "n_pixel_events": 250000, #2_000_000,
-    "n_transactions": 65000, #500_000,
+    "n_audience_participants": 8_000,
+    "n_audience_segments":   500,
+    "n_cookies":  80_000,
+    "n_campaigns": 200,
+    "n_creatives_per_campaign": 5,
+    "n_pixel_events":  2_000_000,
+    "n_transactions": 500_000,
 }
 
 # Fictional brands from Agent.md
@@ -102,6 +102,12 @@ class GeneratorConfig(BaseModel):
     
     # Location configuration
     location: str = "us-east1"
+
+    # Network configuration for Dataproc
+    subnet_name: str = Field(
+        default="dataproc-subnet",
+        description="VPC subnet for Dataproc Serverless jobs"
+    )
     
     # Backward compatibility property
     @property

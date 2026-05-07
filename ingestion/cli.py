@@ -53,9 +53,21 @@ def generate(
 
 def _run_catalog(config: GeneratorConfig):
     """Internal helper to run the full cataloging process."""
+    # 0. Validate catalog name is set
+    if not config.lakehouse_catalog_name:
+        print("❌ Error: lakehouse_catalog_name is not set.")
+        print("   Pass --catalog-name <name> or set it in your config.")
+        print("   Create the catalog first via GCP Console if it doesn't exist.")
+        return
+
     # 1. Lakehouse REST Catalog (Iceberg) - replaces BigLakeRegistrar
     lakehouse = LakehouseCatalogManager(config)
-    lakehouse.ensure_catalog()
+    result = lakehouse.ensure_catalog()
+    if not result.get("catalog_exists", False):
+        print(f"❌ Catalog does not exist: {config.lakehouse_catalog_name}")
+        print("   Create it manually in GCP Console first, then re-run.")
+        return
+
     lakehouse.ensure_namespace()
     lakehouse.register_tables()
 
@@ -88,7 +100,8 @@ def catalog(
     data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
     catalog_project: str = typer.Option(None, "--catalog-project", help="GCP project where Dataplex catalog resides"),
     iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
-    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template")
+    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template"),
+    catalog_name: str = typer.Option(None, "--catalog-name", help="Lakehouse REST catalog name (required)"),
 ):
     """Register Iceberg tables in BigQuery and Dataplex catalog.
 
@@ -105,6 +118,8 @@ def catalog(
         config.iceberg_warehouse = iceberg_warehouse
     if biglake_connection:
         config.biglake_connection = biglake_connection
+    if catalog_name:
+        config.lakehouse_catalog_name = catalog_name
 
     _run_catalog(config)
 
@@ -156,6 +171,70 @@ def setup_catalog(
         # Create namespace + register tables
         lakehouse.ensure_namespace(dry_run=dry_run)
         lakehouse.register_tables(dry_run=dry_run)
+
+
+@app.command()
+def register_table(
+    table_names: str = typer.Option(..., "--table-names", help="Comma-separated list of table names to register"),
+    metadata_locations: str = typer.Option(..., "--metadata-locations", help="Comma-separated list of metadata.json GCS paths"),
+    catalog_name: str = typer.Option(None, "--catalog-name", help="Lakehouse catalog name (defaults to config)"),
+    namespace: str = typer.Option(None, "--namespace", help="Iceberg namespace (defaults to config)"),
+    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored"),
+    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without executing"),
+):
+    """
+    Register existing external Iceberg tables in the Lakehouse REST Catalog.
+
+    Uses a Dataproc Serverless Spark job to call the ``register_table``
+    system procedure, which is required for vended-credentials mode.
+
+    Examples:
+        # Register a single external table
+        uv run python -m ingestion.cli register-table \\
+          --table-names my_table \\
+          --metadata-locations gs://bucket/my_table/metadata/00001-....json \\
+          --catalog-name marketing-lakehouse
+
+        # Register multiple external tables
+        uv run python -m ingestion.cli register-table \\
+          --table-names t1,t2 \\
+          --metadata-locations gs://bucket/t1/metadata.json,gs://bucket/t2/metadata.json
+
+        # Preview without executing
+        uv run python -m ingestion.cli register-table \\
+          --table-names my_table \\
+          --metadata-locations gs://bucket/my_table/metadata.json \\
+          --dry-run
+    """
+    config = GeneratorConfig()
+
+    if data_project:
+        config.data_project_id = data_project
+    if iceberg_warehouse:
+        config.iceberg_warehouse = iceberg_warehouse
+    if catalog_name:
+        config.lakehouse_catalog_name = catalog_name
+    if namespace:
+        config.iceberg_namespace = namespace
+
+    names = [n.strip() for n in table_names.split(",")]
+    locations = [l.strip() for l in metadata_locations.split(",")]
+
+    if len(names) != len(locations):
+        print(f"❌ Error: Number of table names ({len(names)}) does not match number of metadata locations ({len(locations)})")
+        return
+
+    tables = dict(zip(names, locations))
+
+    lakehouse = LakehouseCatalogManager(config)
+    result = lakehouse.ensure_catalog(dry_run=dry_run)
+    if not result.get("catalog_exists", False):
+        print("❌ Catalog does not exist. Create it manually first.")
+        return
+
+    lakehouse.ensure_namespace(dry_run=dry_run)
+    lakehouse.register_external_tables(tables=tables, dry_run=dry_run)
 
 
 @app.command()
@@ -320,7 +399,8 @@ def ingest(
     data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
     catalog_project: str = typer.Option(None, "--catalog-project", help="GCP project where Dataplex catalog resides"),
     iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
-    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template")
+    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template"),
+    catalog_name: str = typer.Option(None, "--catalog-name", help="Lakehouse REST catalog name (required)"),
 ):
     print("Starting full streamed ingestion...")
     config = GeneratorConfig()
@@ -332,13 +412,15 @@ def ingest(
         config.iceberg_warehouse = iceberg_warehouse
     if biglake_connection:
         config.biglake_connection = biglake_connection
+    if catalog_name:
+        config.lakehouse_catalog_name = catalog_name
 
     orchestrator = Orchestrator(config)
     writer = IcebergWriter(config)
-    
+
     # 1. Generate & Write Streamed
     writer.write_stream(orchestrator.generate_all_streamed())
-    
+
     # 2. Register Catalog
     _run_catalog(config)
     print("Ingestion complete.")
