@@ -61,7 +61,7 @@ Join quality is intentionally imperfect — all FK columns carry realistic null 
 
 ### 1.2 Table Schemas
 
-#### `audience` — Modelled audience segments
+#### `audience` / `audience_profile` — Modelled audience segments
 
 Dataplex Zone: **curated-data**
 
@@ -86,6 +86,9 @@ Dataplex Zone: **curated-data**
 | `created_at` | TIMESTAMP | Record creation timestamp | No |
 
 *Semantic synonym pairs: `lat`/`lon` ↔ `location_lat`/`location_lon`; `hem` ↔ `hashed_email` (cookie_registry)*
+
+> **Note:** The metadata YAML file is `metadata/audience_profile.yaml` for historical reasons, but the Iceberg table, catalog entry, and generator all use the name `audience`.
+
 
 ---
 
@@ -116,7 +119,7 @@ Dataplex Zone: **curated-data**
 
 #### `pixel_events` — Ad tracking pixel event stream
 
-Dataplex Zone: **raw-data**
+Dataplex Zone: **curated-data**
 
 | Column | Type | Description | Nullable |
 |--------|------|-------------|----------|
@@ -134,7 +137,8 @@ Dataplex Zone: **raw-data**
 | `device_type` | STRING | desktop / mobile / tablet / ctv | Yes |
 | `spend_usd` | DOUBLE | Media cost for this event (CPM pro-rated for impressions; 0 otherwise) | Yes |
 | `event_ts` | TIMESTAMP | Event timestamp | No |
-| `_partition_date` | DATE | Iceberg partition column (day) | No |
+| `event_date` | DATE | Date of the event (derived from `event_ts`) | No |
+| `partition_date` | DATE | Iceberg partition column (day) | No |
 
 ---
 
@@ -205,7 +209,8 @@ Dataplex Zone: **curated-data**
 | `lon` | DOUBLE | Merchant longitude | Yes |
 | `channel` | STRING | in_store / online / contactless | No |
 | `txn_ts` | TIMESTAMP | Transaction timestamp | No |
-| `_partition_date` | DATE | Iceberg partition column (day) | No |
+| `event_date` | DATE | Date of the transaction (derived from `txn_ts`) | No |
+| `partition_date` | DATE | Iceberg partition column (day) | No |
 
 ---
 
@@ -307,13 +312,12 @@ a column alias or view.
 
 ```
 Dataplex Lake: demo-data  (us-east1)
-  ├── Zone: raw-data          (type: RAW,      GCS-backed)
-  │     └── Asset: pixel_events Iceberg table
   └── Zone: curated-data      (type: CURATED,  BigLake / Iceberg)
         ├── Asset: audience
         ├── Asset: cookie_registry
         ├── Asset: campaigns
         ├── Asset: creatives
+        ├── Asset: pixel_events
         └── Asset: transactions
 
 Entry Group:
@@ -454,7 +458,8 @@ column_descriptions:
   event_type: "Controlled vocab: impression | click | video_start | video_q1 | video_q2 | video_q3 | video_complete | engagement."
   cookie_id: "FK to cookie_registry. ~82% populated. Join to cookie_registry for audience enrichment."
   spend_usd: "Media cost attributed to this event. SUM / impressions * 1000 = CPM."
-  _partition_date: "Iceberg partition key (day). Always filter on this column for time-range queries."
+  event_date: "Date of the event (derived from event_ts)."
+  partition_date: "Iceberg partition key (day). Always filter on this column for time-range queries."
 ```
 
 #### `campaigns`
@@ -530,7 +535,8 @@ column_descriptions:
   hem: "SHA-256 hashed email. Market-specific fill rates (US 25%, UK 15%, JP 10%). Glossary term: Hashed Email / HEM."
   merchant_category_code: "ISO-18245 MCC. 4-digit string. Use for product-category conversion analysis."
   amount_usd: "Transaction value in USD. Use SUM for revenue in ROAS and MER calculations."
-  _partition_date: "Iceberg partition key (day). Always filter on this column."
+  event_date: "Date of the transaction (derived from txn_ts)."
+  partition_date: "Iceberg partition key (day). Always filter on this column."
 ```
 
 ---
@@ -578,14 +584,14 @@ class GeneratorConfig(BaseModel):
     seed: int = 42
     target_markets: list[str] = ["US", "GB", "JP"]
 
-    # Scale (matches Agent.md spec)
-    n_audience_participants: int = 8_000
-    n_audience_segments: int = 500
-    n_cookies: int = 80_000
-    n_campaigns: int = 200
-    n_creatives_per_campaign: int = 5      # ~1 000 total
-    n_pixel_events: int = 2_000_000
-    n_transactions: int = 500_000
+    # Scale — dev defaults for fast iteration; use FULL_SCALE for demo
+    n_audience_participants: int = 100
+    n_audience_segments: int = 10
+    n_cookies: int = 1_000
+    n_campaigns: int = 10
+    n_creatives_per_campaign: int = 2
+    n_pixel_events: int = 5_000
+    n_transactions: int = 1_000
     date_range_days: int = 365
 
     # Match-rate controls — baseline rates
@@ -604,10 +610,18 @@ class GeneratorConfig(BaseModel):
         "JP": MarketMatchRates(txn_cookie_fill_rate=0.15, txn_hem_fill_rate=0.10),
     }
 
-    # Iceberg / GCS output
-    iceberg_warehouse: str = "gs://wpp-dataproducts-lakehouse-warehouse/iceberg"
+    # Project configuration — defaults to current gcloud project
+    data_project_id: str = "<gcloud project>"
+    catalog_project_id: str = "<gcloud project>"
+
+    # Iceberg / GCS output — dynamically derived from project
+    iceberg_warehouse: str = "gs://{project}-warehouse/iceberg"
     iceberg_namespace: str = "marketing"
-    biglake_connection: str = "projects/wpp-dataproducts-lakehouse/locations/us-east1/connections/biglake-conn"
+    biglake_connection: str = "projects/{project_id}/locations/{location}/connections/biglake-conn"
+    location: str = "us-east1"
+
+    # Lakehouse REST Catalog configuration
+    lakehouse_catalog_name: str = ""  # REQUIRED — no default
 ```
 
 ### 3.4 Generation Order (dependency DAG)
@@ -654,7 +668,7 @@ rows to bound peak memory usage. Target: full generation in under 5 minutes on a
 machine with 16 GB RAM.
 
 **Iceberg output**: Each table is written via `pyiceberg`. `pixel_events` and
-`transactions` are partitioned by `_partition_date` (day). All other tables are
+`transactions` are partitioned by `partition_date` (day). All other tables are
 unpartitioned.
 
 ---
@@ -665,13 +679,19 @@ unpartitioned.
 
 ```
 ingestion/
-├── iceberg_writer.py    # Write + register BigLake Iceberg tables via pyiceberg
-├── bq_external.py       # Register Iceberg tables as BigLake external tables in BQ
-├── dataplex_lake.py     # Create/update Dataplex Lake, Zones, Asset registrations
-├── catalog.py           # Register catalog entries in the Entry Group
-├── tag_writer.py        # Apply marketing_table_metadata tag template to entries
-├── glossary_writer.py   # Create Business Glossary terms and synonym graph links
-└── cli.py               # Typer-based CLI (see 4.4)
+├── iceberg_writer.py           # Write Iceberg tables via pyiceberg
+├── bq_external.py              # Register Iceberg tables as BigLake external tables in BQ
+├── dataplex_lake.py            # Create/update Dataplex Lake, Zones, Asset registrations
+├── catalog.py                  # Register catalog entries in the Entry Group
+├── tag_writer.py             # Apply marketing_table_metadata tag template to entries
+├── table_and_column_insights.py # Enrich tables with manual metadata or Google Insights
+├── dataset_insights.py        # Dataset-level Dataplex DATA_DOCUMENTATION scans
+├── data_quality.py            # Create/sync/run Dataplex data quality scans
+├── data_profiling.py          # Create/run Dataplex data profile scans
+├── lakehouse_catalog.py       # Manage BigLake Iceberg REST Catalog (namespaces + table registration)
+├── glossary_writer.py         # Create Business Glossary terms and synonym graph links
+├── glossary_manager.py        # Manage Dataplex business glossary creation and term linking
+└── cli.py                     # Typer-based CLI (see 4.4)
 ```
 
 ### 4.2 Ingestion Pipeline
@@ -742,7 +762,7 @@ python -m ingestion.cli reset --config config.yaml --confirm
 | T8 | Implement `orchestrator.py` | D3 | T3–T7 | Runs full DAG; passes ID pools between generators |
 | T9 | Implement `iceberg_writer.py` | D4 | T1 | BigLake Iceberg via pyiceberg; partitioned tables |
 | T10 | Implement `bq_external.py` | D4 | T9 | Register BigLake external tables; uses biglake-conn |
-| T11 | Implement `dataplex_lake.py` | D4 | T9 | Create demo-data lake, raw-data + curated-data zones, assets |
+| T11 | Implement `dataplex_lake.py` | D4 | T9 | Create demo-data lake with curated-data zone and assets |
 | T12 | Implement `catalog.py` + `tag_writer.py` | D4 | T11 | Entry Group marketing-lakehouse; per-table entries + tags |
 | T13 | Implement `glossary_writer.py` | D4 | T12 | Terms + synonym graph links; key demo feature |
 | T14 | Implement `cli.py` + `--validate` checks | D4 | T8–T13 | All five subcommands; ±3pp match-rate assertions |
@@ -752,10 +772,10 @@ python -m ingestion.cli reset --config config.yaml --confirm
 ### Infrastructure Pre-requisites (must exist before T16)
 
 1. **GCS bucket** — warehouse bucket in `us-east1` with uniform bucket-level IAM
-2. **BigLake connection** — `projects/wpp-dataproducts-lakehouse/locations/us-east1/connections/biglake-conn`
-3. **BigQuery dataset** — `wpp-dataproducts-lakehouse.marketing` in `us-east1`
+2. **BigLake connection** — `projects/{project_id}/locations/{location}/connections/biglake-conn`
+3. **BigQuery dataset** — `{project_id}.marketing` in `us-east1`
 4. **Dataplex Lake** — `demo-data` in `us-east1`
-5. **Dataplex Zones** — `raw-data` (RAW) and `curated-data` (CURATED) under `demo-data`
+5. **Dataplex Zone** — `curated-data` (CURATED) under `demo-data`
 6. **IAM roles** for the service account:
    - `roles/bigquery.dataEditor`
    - `roles/bigquery.connectionAdmin`

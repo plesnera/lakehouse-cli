@@ -610,12 +610,24 @@ The Lakehouse REST Catalog provides a single source of truth for Iceberg metadat
 uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full
 ```
 
+> **gcloud limitation with vended-credentials**
+>
+> For catalogs using **vended-credentials** mode, the gcloud CLI **cannot reliably create catalogs or register tables**. It does not properly send the `X-Iceberg-Access-Delegation: vended-credentials` header that BigLake requires in this mode.
+>
+> | Operation | gcloud + vended-credentials | Workaround |
+> |-----------|----------------------------|------------|
+> | Create catalog | ❌ Does not work | **GCP Console** → BigLake > Iceberg catalogs > Create catalog |
+> | Register tables | ❌ Does not work | **This CLI** (uses Dataproc Spark) |
+
 **Creating the Catalog:**
 
 Catalogs using **vended-credentials** mode must be created via the **GCP Console**.
-gcloud does not properly support the `X-Iceberg-Access-Delegation: vended-credentials` header required for table registration.
 
 Navigate to: **BigLake > Iceberg catalogs > Create catalog**
+
+Choose:
+- Catalog type: **GCS bucket**
+- Credential mode: **Vended credentials**
 
 For more details, see the official documentation:
 https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#process
@@ -629,6 +641,85 @@ The CLI automatically registers tables via **Dataproc Serverless (Managed Servic
 which properly handles the `X-Iceberg-Access-Delegation: vended-credentials` header.
 No manual steps are required — `setup-catalog --full` submits a PySpark batch job that
 registers all existing Iceberg tables using the `register_table` system procedure.
+
+### Registering External or Custom Tables
+
+The `register-table` command registers **arbitrary** existing Iceberg tables (not just the
+built-in synthetic marketing tables). Use it when you have pre-existing Iceberg data
+in GCS that needs to be registered in the Lakehouse REST Catalog.
+
+**Key difference:**
+- `setup-catalog --full` — registers the built-in tables (`audience`, `campaigns`, etc.) defined in `generators/config.py`
+- `register-table` — registers any tables you specify by name and metadata location
+
+#### Register a single external table
+```bash
+uv run python -m ingestion.cli register-table \
+  --table-names my_table \
+  --metadata-locations gs://my-bucket/my_table/metadata.json \
+  --catalog-name marketing-lakehouse
+```
+
+#### Register multiple external tables
+```bash
+uv run python -m ingestion.cli register-table \
+  --table-names t1,t2,t3 \
+  --metadata-locations gs://b/t1/metadata.json,gs://b/t2/metadata.json,gs://b/t3/metadata.json \
+  --catalog-name marketing-lakehouse \
+  --namespace external
+```
+
+#### Preview without executing (dry-run)
+```bash
+uv run python -m ingestion.cli register-table \
+  --table-names my_table \
+  --metadata-locations gs://bucket/my_table/metadata.json \
+  --dry-run
+```
+
+**Command options:**
+- `--table-names` — comma-separated list of table names (required)
+- `--metadata-locations` — comma-separated list of metadata.json GCS paths (required)
+- `--catalog-name` — Lakehouse catalog name (defaults to config)
+- `--namespace` — Iceberg namespace (defaults to config, e.g. `marketing`)
+- `--data-project` — GCP project where data is stored
+- `--iceberg-warehouse` — GCS path for Iceberg data
+- `--dry-run` — preview actions without executing
+
+### Programmatic Registration
+
+For automation or custom scripts, use `LakehouseCatalogManager.register_external_tables()` directly:
+
+```python
+from ingestion.lakehouse_catalog import LakehouseCatalogManager
+from generators.config import GeneratorConfig
+
+config = GeneratorConfig(
+    data_project_id="my-project",
+    lakehouse_catalog_name="marketing-lakehouse",
+    iceberg_namespace="marketing",
+)
+
+manager = LakehouseCatalogManager(config)
+
+# Verify catalog exists
+result = manager.ensure_catalog()
+if not result["catalog_exists"]:
+    raise RuntimeError("Catalog does not exist")
+
+# Ensure namespace exists
+manager.ensure_namespace()
+
+# Register arbitrary tables
+tables = {
+    "external_a": "gs://other-bucket/external_a/metadata.json",
+    "external_b": "gs://other-bucket/external_b/metadata.json",
+}
+result = manager.register_external_tables(tables=tables)
+print(f"Registered {result['tables_registered']} tables")
+```
+
+This is the same mechanism the CLI `register-table` command uses internally.
 
 **Key features:**
 - Credential vending enables fine-grained access without users needing direct GCS permissions
@@ -686,7 +777,7 @@ The ingestion module contains the following classes that handle data ingestion a
 
 ### Data Writing & Registration
 - **`IcebergWriter`** (`ingestion/iceberg_writer.py`): Writes data to Iceberg tables in GCS
-- **`LakehouseCatalogManager`** (`ingestion/lakehouse_catalog.py`): Manages Google Cloud Lakehouse REST Catalog for Iceberg metadata, providing a single source of truth for BigQuery, Spark, and Trino table discovery
+- **`LakehouseCatalogManager`** (`ingestion/lakehouse_catalog.py`): Manages Google Cloud Lakehouse REST Catalog for Iceberg metadata. Provides `register_tables()` for the built-in marketing tables and `register_external_tables()` for arbitrary table registration
 - **`DataplexManager`** (`ingestion/dataplex_lake.py`): Manages Dataplex lake topology and asset registration
 - **`CatalogManager`** (`ingestion/catalog.py`): Creates and manages Dataplex catalog entries
 

@@ -37,12 +37,26 @@ gcloud services enable biglake.googleapis.com
 
 ### Create the Catalog (Vended Credentials Mode)
 
-For enterprise deployments using credential vending, the catalog must be created via the **GCP Console**.
-gcloud does not properly support the `X-Iceberg-Access-Delegation: vended-credentials` header required for table registration.
+> **gcloud limitation with vended-credentials**
+>
+> For catalogs using **vended-credentials** mode, the gcloud CLI **cannot reliably create catalogs or register tables**. It does not properly send the `X-Iceberg-Access-Delegation: vended-credentials` header that BigLake requires in this mode.
+>
+> | Operation | gcloud + vended-credentials | Workaround |
+> |-----------|----------------------------|------------|
+> | Create catalog | ❌ Does not work | **GCP Console** → BigLake > Iceberg catalogs > Create catalog |
+> | Register tables | ❌ Does not work | **This CLI** (uses Dataproc Spark) |
+
+**Step 1 — Create the catalog in the GCP Console**
 
 Navigate to: **BigLake > Iceberg catalogs > Create catalog**
 
+Choose:
+- Catalog type: **GCS bucket**
+- Credential mode: **Vended credentials**
+
 For more details, see: https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#process
+
+**Step 2 — Run the CLI to verify, create namespace, and register tables**
 
 ### Run Setup via CLI
 
@@ -56,6 +70,20 @@ uv run python -m ingestion.cli setup-catalog \
 ### Table Registration with Vended Credentials
 
 The CLI automatically registers tables via **Dataproc Serverless (Managed Service for Apache Spark)**, which properly handles the `X-Iceberg-Access-Delegation: vended-credentials` header. No manual steps required.
+
+#### Registering External/Custom Tables
+
+To register arbitrary pre-existing Iceberg tables (not the built-in synthetic tables):
+
+```bash
+uv run python -m ingestion.cli register-table \
+  --table-names my_table,another_table \
+  --metadata-locations gs://bucket/my_table/metadata.json,gs://bucket/another_table/metadata.json \
+  --catalog-name YOUR-CATALOG-NAME
+```
+
+- Use `setup-catalog --full` for the built-in tables (`audience`, `campaigns`, `pixel_events`, etc.)
+- Use `register-table` for any external tables with existing metadata files
 
 ### Alternative: End-User Credentials Mode
 
