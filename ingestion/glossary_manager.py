@@ -12,6 +12,7 @@ Parses a YAML glossary definition file and upserts:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ import yaml
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
+from google.protobuf import field_mask_pb2
 
 from generators.config import GeneratorConfig
 
@@ -428,52 +430,109 @@ class BusinessGlossaryManager:
         except NotFound:
             print(f"ℹ️  Glossary already absent: {glossary_def.glossary_id}")
 
+    def _ensure_glossary_aspect_type(self) -> None:
+        """Create the glossary-term-association aspect type if it doesn't exist."""
+        parent = self.config.catalog_resource_parent
+        aspect_type_id = "glossary-term-association"
+        aspect_type_path = f"{parent}/aspectTypes/{aspect_type_id}"
+
+        try:
+            self.catalog_client.get_aspect_type(name=aspect_type_path)
+            print(f"Aspect Type {aspect_type_id} exists.")
+        except Exception:
+            print(f"Creating Aspect Type via gcloud: {aspect_type_id}")
+            import subprocess
+            import tempfile
+            metadata_spec = {
+                "name": "GlossaryTermAssociation",
+                "type": "record",
+                "recordFields": [
+                    {"name": "term_name", "type": "string", "index": 1},
+                    {"name": "term_entry_path", "type": "string", "index": 2},
+                    {"name": "relationship", "type": "string", "index": 3},
+                ]
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
+                json.dump(metadata_spec, tf)
+                temp_path = tf.name
+            try:
+                cmd = [
+                    "gcloud", "dataplex", "aspect-types", "create", aspect_type_id,
+                    f"--location={self.config.location}",
+                    "--display-name=Glossary Term Association",
+                    f"--metadata-template-file-name={temp_path}"
+                ]
+                subprocess.run(cmd, check=True)
+                print(f"Successfully created Aspect Type: {aspect_type_id}")
+            except Exception as e:
+                print(f"Warning: Could not create Aspect Type: {e}")
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
     def apply_glossary_to_assets(self, input_path: Optional[str] = None) -> None:
-        """Create definition links between glossary terms and BigQuery table columns."""
+        """Apply glossary-term-association aspects to marketing-lakehouse entries.
+
+        Uses aspects instead of EntryLinks because Dataplex v2 ``definition``
+        links only work between glossary-term entries, not glossary-term → table.
+        """
         path = self._resolve_input(input_path)
         glossary_def = self._parse_glossary_file(path)
         glossary_resource = f"{self.parent}/glossaries/{glossary_def.glossary_id}"
 
-        entry_group = f"{self.parent}/entryGroups/@dataplex"
+        self._ensure_glossary_aspect_type()
 
+        aspect_type_id = "glossary-term-association"
+        parent = self.config.catalog_resource_parent
+        aspect_type_path = f"{parent}/aspectTypes/{aspect_type_id}"
+
+        # Collect table → terms mapping
+        table_terms: Dict[str, List[GlossaryTermDef]] = {}
         for cat_def in glossary_def.categories:
             for term_def in cat_def.terms:
-                term_resource = f"{glossary_resource}/terms/{term_def.name}"
                 for table in term_def.tables:
-                    # BigQuery entry path for the column
-                    bq_entry = (
-                        f"projects/{self.config.project_id}/locations/{self.config.location}"
-                        f"/entryGroups/@bigquery/entries/"
-                        f"bigquery.table.`{self.config.project_id}`.{self.config.iceberg_namespace}.{table}"
-                    )
-                    link_id = f"def-{term_def.name}-{_slugify(table)}"
+                    table_terms.setdefault(table, []).append(term_def)
 
-                    try:
-                        entry_link = dataplex_v1.EntryLink(
-                            entry_link_type="projects/dataplex-types/locations/global/entryLinkTypes/definition",
-                            entry_references=[
-                                dataplex_v1.EntryLink.EntryReference(
-                                    name=term_resource,
-                                    type_=dataplex_v1.EntryLink.EntryReference.Type.SOURCE,
-                                ),
-                                dataplex_v1.EntryLink.EntryReference(
-                                    name=bq_entry,
-                                    type_=dataplex_v1.EntryLink.EntryReference.Type.TARGET,
-                                ),
-                            ],
-                        )
-                        self.catalog_client.create_entry_link(
-                            request=dataplex_v1.CreateEntryLinkRequest(
-                                parent=entry_group,
-                                entry_link_id=link_id,
-                                entry_link=entry_link,
-                            )
-                        )
-                        print(f"  🔗 Linked {term_def.display_name} → {table}")
-                    except AlreadyExists:
-                        print(f"  ↔️  Link already exists: {term_def.display_name} → {table}")
-                    except Exception as e:
-                        print(f"  ⚠️  Failed to link {term_def.display_name} → {table}: {e}")
+        for table, terms in table_terms.items():
+            entry_path = f"{self.config.entry_group_path}/entries/{table}"
+
+            term_names = [t.display_name for t in terms]
+            term_entry_paths = [
+                f"{self.parent}/entryGroups/@dataplex/entries/"
+                f"projects/{self.project_number}/locations/{self.config.location}/"
+                f"glossaries/{glossary_def.glossary_id}/terms/{t.name}"
+                for t in terms
+            ]
+
+            aspect_key = (
+                f"{self.config.catalog_project_id}.{self.config.location}."
+                f"{aspect_type_id}"
+            )
+            aspect_data = {
+                "term_name": ", ".join(term_names),
+                "term_entry_path": ", ".join(term_entry_paths),
+                "relationship": "business_glossary",
+            }
+
+            aspect = dataplex_v1.Aspect(
+                aspect_type=aspect_type_path,
+                data=aspect_data,
+            )
+
+            update_entry = dataplex_v1.Entry(name=entry_path)
+            update_entry.aspects[aspect_key] = aspect
+
+            try:
+                self.catalog_client.update_entry(
+                    request=dataplex_v1.UpdateEntryRequest(
+                        entry=update_entry,
+                        update_mask=field_mask_pb2.FieldMask(paths=["aspects"]),
+                        aspect_keys=[aspect_key],
+                    )
+                )
+                print(f"  ✅ Associated {len(terms)} term(s) with {table}: {', '.join(term_names)}")
+            except Exception as e:
+                print(f"  ⚠️  Failed to associate terms with {table}: {e}")
 
         print("✅ Glossary-to-asset linking complete.")
 
@@ -609,7 +668,11 @@ class BusinessGlossaryManager:
         import requests
         
         canonical_slug = term_def.name
-        canonical_resource_entry = f"projects/{self.project_number}/locations/{self.config.location}/entryGroups/@dataplex/entries/projects/{self.project_number}/locations/{self.config.location}/glossaries/{glossary_id}/terms/{canonical_slug}"
+        canonical_resource_entry = (
+            f"{self.parent}/entryGroups/@dataplex/entries/"
+            f"projects/{self.project_number}/locations/{self.config.location}/"
+            f"glossaries/{glossary_id}/terms/{canonical_slug}"
+        )
 
         for link_name in linked_term_names:
             link_slug = _slugify(link_name)
@@ -617,7 +680,11 @@ class BusinessGlossaryManager:
                 print(f"  ⚠️  Could not find resource for linked term '{link_name}', skipping.")
                 continue
 
-            linked_term_entry = f"projects/{self.project_number}/locations/{self.config.location}/entryGroups/@dataplex/entries/projects/{self.project_number}/locations/{self.config.location}/glossaries/{glossary_id}/terms/{link_slug}"
+            linked_term_entry = (
+                f"{self.parent}/entryGroups/@dataplex/entries/"
+                f"projects/{self.project_number}/locations/{self.config.location}/"
+                f"glossaries/{glossary_id}/terms/{link_slug}"
+            )
             
             id_parts = sorted([canonical_slug, link_slug])
             entry_link_id = f"{link_type}-{id_parts[0]}-{id_parts[1]}"

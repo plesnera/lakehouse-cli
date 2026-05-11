@@ -1,4 +1,5 @@
 from google.cloud import dataplex_v1
+from google.protobuf import field_mask_pb2
 from generators.config import GeneratorConfig, TABLES
 from ingestion.table_metadata import load_all_table_metadata
 
@@ -7,6 +8,41 @@ class CatalogManager:
     def __init__(self, config: GeneratorConfig):
         self.config = config
         self.client = dataplex_v1.CatalogServiceClient()
+
+    def _build_entry_source(self, name: str, meta) -> dataplex_v1.EntrySource:
+        """Build an EntrySource protobuf for a table entry."""
+        display = meta.display_name if meta else name.replace("_", " ").title()
+        description = meta.description if meta else ""
+        resource = self.config.get_bq_resource_path(name)
+
+        return dataplex_v1.EntrySource(
+            display_name=display,
+            description=description,
+            resource=resource,
+            system="BigQuery",
+            platform="Google Cloud",
+        )
+
+    def ensure_entry_type(self, entry_type_id: str = "table"):
+        """Create the custom entry type if it doesn't exist."""
+        parent = self.config.catalog_resource_parent
+        entry_type_path = f"{parent}/entryTypes/{entry_type_id}"
+
+        try:
+            self.client.get_entry_type(name=entry_type_path)
+            print(f"Entry Type {entry_type_id} exists.")
+        except Exception:
+            entry_type = dataplex_v1.EntryType(
+                display_name=entry_type_id.replace("-", " ").title(),
+                description="Generic data table entry type for the marketing lakehouse.",
+            )
+            operation = self.client.create_entry_type(
+                parent=parent,
+                entry_type_id=entry_type_id,
+                entry_type=entry_type,
+            )
+            operation.result()
+            print(f"Created Entry Type: {entry_type_id}")
 
     def ensure_entry_group(self):
         parent = self.config.catalog_resource_parent
@@ -39,14 +75,26 @@ class CatalogManager:
             entry_id = name
             entry_path = f"{self.config.entry_group_path}/entries/{entry_id}"
             meta = all_meta.get(name)
-            display = meta.display_name if meta else name
+            display = meta.display_name if meta else name.replace("_", " ").title()
+            entry_source = self._build_entry_source(name, meta)
 
             try:
-                self.client.get_entry(name=entry_path)
-                print(f"Entry {entry_id} exists.")
+                existing = self.client.get_entry(name=entry_path)
+                # Update existing entry if entry_source is missing or bare
+                if not existing.entry_source or not existing.entry_source.display_name:
+                    updated = dataplex_v1.Entry(
+                        name=entry_path,
+                        entry_source=entry_source,
+                    )
+                    mask = field_mask_pb2.FieldMask(paths=["entry_source"])
+                    self.client.update_entry(entry=updated, update_mask=mask)
+                    print(f"Updated Entry: {entry_id} — {display}")
+                else:
+                    print(f"Entry {entry_id} exists.")
             except Exception:
                 entry = dataplex_v1.Entry(
                     entry_type=f"{self.config.catalog_resource_parent}/entryTypes/table",
+                    entry_source=entry_source,
                 )
                 self.client.create_entry(
                     parent=self.config.entry_group_path,

@@ -25,3 +25,10 @@ class GlossaryWriter:
     def create_terms(self):
         """No-op — terms are created as part of create_glossary_from_markdown."""
         pass
+
+    def apply(self):
+        """Link glossary terms to BigQuery/Iceberg table entries."""
+        try:
+            self._manager.apply_glossary_to_assets()
+        except FileNotFoundError:
+            print("ℹ️  No glossary YAML found. Run 'create-templates' first.")

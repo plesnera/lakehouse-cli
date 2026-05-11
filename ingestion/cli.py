@@ -79,6 +79,7 @@ def _run_catalog(config: GeneratorConfig):
     # 3. Catalog Entries
     cat = CatalogManager(config)
     cat.ensure_entry_group()
+    cat.ensure_entry_type()
     cat.register_entries()
 
     # 4. Tags
@@ -90,6 +91,7 @@ def _run_catalog(config: GeneratorConfig):
     gloss = GlossaryWriter(config)
     gloss.create_glossary()
     gloss.create_terms()
+    gloss.apply()
 
     # 6. Metadata Enrichment (Optional - can be time-consuming)
     print("Note: Run 'uv run python -m ingestion.cli enrich-metadata' to add table/column descriptions")
