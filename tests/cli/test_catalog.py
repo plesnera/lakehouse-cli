@@ -120,7 +120,6 @@ class TestRunCatalogLogic:
         _run_catalog(config)
 
         lakehouse_instance.ensure_namespace.assert_not_called()
-        lakehouse_instance.register_tables.assert_not_called()
 
     @patch("ingestion.cli.LakehouseCatalogManager")
     def test_runs_full_pipeline_when_catalog_exists(self, mock_lakehouse_class):
@@ -134,7 +133,6 @@ class TestRunCatalogLogic:
         _run_catalog(config)
 
         lakehouse_instance.ensure_namespace.assert_called_once()
-        lakehouse_instance.register_tables.assert_called_once()
 
 
 class TestIngestCommand:

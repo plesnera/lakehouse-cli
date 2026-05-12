@@ -4,19 +4,19 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "faker",
-    "pyiceberg",
-    "pyarrow",
-    "pydantic>=2.0",
-    "typer",
-    "google-cloud-storage",
+    "google-api-core",
+    "google-auth",
     "google-cloud-bigquery",
     "google-cloud-dataplex",
-    "google-cloud-dataproc",
-    "google-cloud-dataproc-spark-connect",
+    "google-cloud-storage",
     "numpy",
-    "sqlalchemy",
-    "requests",
+    "protobuf",
+    "pyarrow",
+    "pydantic>=2.0",
+    "pyiceberg",
     "pyyaml",
+    "requests",
+    "typer",
 ]
 
 [project.optional-dependencies]

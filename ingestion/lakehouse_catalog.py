@@ -5,23 +5,22 @@ Lakehouse REST Catalog (Iceberg) Manager
 Manages Google Cloud Lakehouse REST Catalog for Iceberg metadata, providing
 a single source of truth for BigQuery, Spark, and Trino table discovery.
 
-Uses gcloud CLI for catalog/namespace operations and DataprocSparkSession
-for table registration.
+Uses gcloud CLI for catalog/namespace operations.
 """
 
-import json
 import subprocess
 from typing import Dict
 
-from generators.config import GeneratorConfig, TABLES
+from generators.config import GeneratorConfig
 
 
 class LakehouseCatalogManager:
     """
     Manages Google Cloud Lakehouse REST Catalog operations for Iceberg tables.
 
-    Uses gcloud CLI for catalog/namespace operations and
-    DataprocSparkSession for table registration.
+    Uses gcloud CLI for catalog/namespace operations.
+    Table registration is handled by Dataplex catalog entries
+    (CatalogManager.register_entries).
     """
 
     def __init__(self, config: GeneratorConfig):
@@ -209,76 +208,3 @@ class LakehouseCatalogManager:
                 return {"namespace_deleted": False}
         except subprocess.TimeoutExpired:
             raise RuntimeError("gcloud namespace delete timed out")
-
-    # ---- Table registration via DataprocSparkSession ----
-
-    def register_external_tables(
-        self, tables: Dict[str, str], dry_run: bool = False
-    ) -> Dict[str, bool]:
-        """
-        Register arbitrary Iceberg tables via DataprocSparkSession.
-
-        Runs the local register_tables.py script which uses
-        DataprocSparkSession with BigQueryMetastoreCatalog.
-
-        :param tables: Mapping of table names to metadata.json GCS paths.
-        :param dry_run: Preview actions without executing.
-        :return: Dict with 'tables_registered' count.
-        """
-        results = {"tables_registered": 0}
-
-        if dry_run:
-            for table_name, metadata_location in tables.items():
-                print(f"[DRY RUN] Would register table: {table_name}")
-                print(f"  metadata location: {metadata_location}")
-                results["tables_registered"] += 1
-            return results
-
-        cmd = [
-            "python",
-            "register_tables.py",
-            f"--project-id={self.project_id}",
-            f"--region={self.location}",
-            f"--subnet-name={self.config.subnet_name}",
-            f"--location={self.location}",
-            f"--catalog={self.catalog_name}",
-            f"--namespace={self.namespace}",
-            f"--warehouse={self.warehouse}",
-            f"--tables={json.dumps(tables)}",
-        ]
-
-        print(f"Registering {len(tables)} tables via DataprocSparkSession...")
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            if result.returncode == 0:
-                print(f"Registration completed: {len(tables)} tables registered")
-                results["tables_registered"] = len(tables)
-            else:
-                print(f"Registration failed (exit {result.returncode}):")
-                print(result.stderr)
-                results["tables_registered"] = 0
-        except subprocess.TimeoutExpired:
-            print("Registration timed out after 10 minutes")
-            results["tables_registered"] = 0
-        except FileNotFoundError:
-            raise RuntimeError("python or register_tables.py not available")
-
-        return results
-
-    def register_tables(self, dry_run: bool = False) -> Dict[str, bool]:
-        """
-        Register all built-in tables via DataprocSparkSession.
-
-        Runs register_tables.py with BigQueryMetastoreCatalog to register
-        each existing Iceberg table using the ``register_table`` system procedure.
-        """
-        tables_dict = {
-            name: f"{self.warehouse}/{self.namespace}/{name}/metadata.json"
-            for name in TABLES
-        }
-        return self.register_external_tables(tables=tables_dict, dry_run=dry_run)

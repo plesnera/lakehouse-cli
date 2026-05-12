@@ -69,7 +69,6 @@ def _run_catalog(config: GeneratorConfig):
         return
 
     lakehouse.ensure_namespace()
-    lakehouse.register_tables()
 
     # 2. Dataplex Lake Topology
     dp = DataplexManager(config)
@@ -143,16 +142,18 @@ def setup_catalog(
     This command then:
     1. Verifies the catalog exists
     2. Creates the namespace (if missing)
-    3. Registers existing Iceberg tables
+
+    Table registration is handled by Dataplex catalog entries
+    (via ``catalog`` or ``ingest`` commands).
 
     Examples:
         # Preview what would be done
         uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full --dry-run
 
-        # Verify catalog and register tables
+        # Verify catalog and create namespace
         uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full
 
-        # Verify catalog only (no namespace/tables)
+        # Verify catalog only (no namespace)
         uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse
     """
     config = GeneratorConfig()
@@ -170,73 +171,8 @@ def setup_catalog(
         return
 
     if full:
-        # Create namespace + register tables
+        # Create namespace
         lakehouse.ensure_namespace(dry_run=dry_run)
-        lakehouse.register_tables(dry_run=dry_run)
-
-
-@app.command()
-def register_table(
-    table_names: str = typer.Option(..., "--table-names", help="Comma-separated list of table names to register"),
-    metadata_locations: str = typer.Option(..., "--metadata-locations", help="Comma-separated list of metadata.json GCS paths"),
-    catalog_name: str = typer.Option(None, "--catalog-name", help="Lakehouse catalog name (defaults to config)"),
-    namespace: str = typer.Option(None, "--namespace", help="Iceberg namespace (defaults to config)"),
-    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored"),
-    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without executing"),
-):
-    """
-    Register existing external Iceberg tables in the Lakehouse REST Catalog.
-
-    Uses a Dataproc Serverless Spark job to call the ``register_table``
-    system procedure, which is required for vended-credentials mode.
-
-    Examples:
-        # Register a single external table
-        uv run python -m ingestion.cli register-table \\
-          --table-names my_table \\
-          --metadata-locations gs://bucket/my_table/metadata/00001-....json \\
-          --catalog-name marketing-lakehouse
-
-        # Register multiple external tables
-        uv run python -m ingestion.cli register-table \\
-          --table-names t1,t2 \\
-          --metadata-locations gs://bucket/t1/metadata.json,gs://bucket/t2/metadata.json
-
-        # Preview without executing
-        uv run python -m ingestion.cli register-table \\
-          --table-names my_table \\
-          --metadata-locations gs://bucket/my_table/metadata.json \\
-          --dry-run
-    """
-    config = GeneratorConfig()
-
-    if data_project:
-        config.data_project_id = data_project
-    if iceberg_warehouse:
-        config.iceberg_warehouse = iceberg_warehouse
-    if catalog_name:
-        config.lakehouse_catalog_name = catalog_name
-    if namespace:
-        config.iceberg_namespace = namespace
-
-    names = [n.strip() for n in table_names.split(",")]
-    locations = [l.strip() for l in metadata_locations.split(",")]
-
-    if len(names) != len(locations):
-        print(f"❌ Error: Number of table names ({len(names)}) does not match number of metadata locations ({len(locations)})")
-        return
-
-    tables = dict(zip(names, locations))
-
-    lakehouse = LakehouseCatalogManager(config)
-    result = lakehouse.ensure_catalog(dry_run=dry_run)
-    if not result.get("catalog_exists", False):
-        print("❌ Catalog does not exist. Create it manually first.")
-        return
-
-    lakehouse.ensure_namespace(dry_run=dry_run)
-    lakehouse.register_external_tables(tables=tables, dry_run=dry_run)
 
 
 @app.command()

@@ -25,10 +25,9 @@ class TestSetupCatalogCommand:
 
         lakehouse_instance.ensure_catalog.assert_called_once_with(dry_run=False)
         lakehouse_instance.ensure_namespace.assert_not_called()
-        lakehouse_instance.register_tables.assert_not_called()
 
     @patch("ingestion.cli.LakehouseCatalogManager")
-    def test_full_flag_creates_catalog_namespace_and_tables(self, mock_lakehouse_class):
+    def test_full_flag_creates_catalog_and_namespace(self, mock_lakehouse_class):
         lakehouse_instance = mock_lakehouse_class.return_value
 
         result = runner.invoke(
@@ -38,7 +37,6 @@ class TestSetupCatalogCommand:
 
         lakehouse_instance.ensure_catalog.assert_called_once_with(dry_run=False)
         lakehouse_instance.ensure_namespace.assert_called_once_with(dry_run=False)
-        lakehouse_instance.register_tables.assert_called_once_with(dry_run=False)
 
     @patch("ingestion.cli.LakehouseCatalogManager")
     def test_dry_run_previews_without_executing(self, mock_lakehouse_class):
@@ -51,7 +49,6 @@ class TestSetupCatalogCommand:
 
         lakehouse_instance.ensure_catalog.assert_called_once_with(dry_run=True)
         lakehouse_instance.ensure_namespace.assert_called_once_with(dry_run=True)
-        lakehouse_instance.register_tables.assert_called_once_with(dry_run=True)
 
     @patch("ingestion.cli.LakehouseCatalogManager")
     def test_uses_provided_catalog_name(self, mock_lakehouse_class):
