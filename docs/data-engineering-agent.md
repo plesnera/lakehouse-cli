@@ -1,84 +1,75 @@
 # BigQuery Data Engineering Agent — Setup Guide
 
-The BigQuery Data Engineering Agent is an AI-powered service that builds and
-self-heals data pipelines via natural language prompts. This document describes
-how to use it with the marketing lakehouse demo data.
+This guide explains how to use BigQuery Data Engineering Agent with the metadata pipeline in this repository.
 
-Ref: https://cloud.google.com/bigquery/docs/data-engineering-agent-pipelines
+## Purpose
+
+This project does not create data tables itself; it manages catalog metadata, glossary terms, and governance context so the Data Engineering Agent can reason over existing tables more effectively.
+
+Reference:
+- https://cloud.google.com/bigquery/docs/data-engineering-agent-pipelines
 
 ## Prerequisites
 
-1. The `marketing` dataset must exist in `wpp-dataproducts-lakehouse` with all
-   six tables ingested and registered.
-2. Catalog metadata (descriptions, tags, glossary) must be applied — the agent
-   uses this metadata to understand the schema.
-3. The BigQuery Data Engineering Agent must be enabled on your project (via
-   the BigQuery console or API).
+1. The target BigQuery dataset (default: `marketing`) already contains the six expected tables:
+   - `audience`
+   - `cookie_registry`
+   - `campaigns`
+   - `creatives`
+   - `pixel_events`
+   - `transactions`
+2. A Lakehouse REST catalog already exists.
+3. You have permission to run Dataplex and BigQuery metadata operations.
 
-## Enabling the Agent
+## Recommended preparation workflow
 
-1. Navigate to **BigQuery Studio** in the Google Cloud Console.
-2. Open the `marketing` dataset.
-3. Click **Data Engineering Agent** in the left panel (or access via the
-   BigQuery API if using the programmatic interface).
-4. The agent will automatically discover tables registered in the dataset.
+Run these steps before using the Data Engineering Agent in BigQuery Studio:
 
-## Example Prompts
+```bash
+# 1) Verify catalog + namespace
+uv run python -m ingestion.cli setup-catalog \
+  --catalog-name YOUR_CATALOG_NAME \
+  --full
 
-These prompts are designed to work with the synthetic marketing data and
-demonstrate the agent's ability to discover schemas via the Knowledge Catalog:
+# 2) Register Dataplex assets, entries, tags, and glossary
+uv run python -m ingestion.cli catalog \
+  --catalog-name YOUR_CATALOG_NAME
 
-### Audience Discovery
-```
-Find all audience segments in the US market that over-index on the
-"meta" channel and have an income band of "High". Show their segment
-names, age bands, and brand affinity scores.
-```
+# 3) Apply table/column descriptions
+uv run python -m ingestion.cli enrich-metadata
 
-### Campaign Performance
-```
-Build a pipeline that joins campaigns to pixel_events and calculates
-CTR, CPC, and total spend for each campaign. Include only completed
-campaigns. Materialise the results as a new table called
-campaign_performance_summary.
+# 4) Ensure glossary links are applied
+uv run python -m ingestion.cli manage-glossary --action apply
 ```
 
-### Cross-Channel Attribution
-```
-Create a pipeline that attributes transactions to ad exposures.
-Join transactions to pixel_events using cookie_id (primary) and
-hem/hashed_email (fallback) within a 30-day attribution window.
-Calculate ROAS per campaign and market.
-```
+## Example prompts
 
-### Semantic Discovery
+### Audience discovery
 ```
-Which tables contain "visitor" or "advertiser" data? Show me the
-relevant columns and how they join to other tables.
+Find US audience segments that over-index on Meta and have high income. Return segment_name, age_band, and brand_affinity_scores.
 ```
 
-The agent should resolve "visitor" to `cookie_registry.visitor_id` (synonym for
-`cookie_id`) and "advertiser" to `campaigns.advertiser` (synonym for `brand`)
-via the Business Glossary synonym links.
-
-### LTV Analysis
+### Campaign performance pipeline
 ```
-Build a customer lifetime value pipeline. Group transactions by
-pan_token, calculate total spend, transaction count, and first
-purchase date. Flag high-value customers (top 10% by lifetime spend).
+Build a pipeline that joins campaigns and pixel_events to calculate impressions, clicks, CTR, and spend by campaign for completed campaigns.
 ```
 
-## Metadata That Powers the Agent
+### Cross-channel attribution
+```
+Create a pipeline that attributes transactions to ad exposures using cookie_id first and hem as fallback within a 30-day window. Return ROAS by campaign and market.
+```
 
-The agent relies on these metadata layers (all set up by the ingestion pipeline):
+### Semantic discovery
+```
+Which tables contain visitor or advertiser data, and how should they be joined?
+```
 
-- **Catalog entries** with display names and descriptions (`catalog.py`)
-- **Tag template** `marketing_table_metadata` with business_owner, data_domain,
-  pii_class, refresh_cadence, row_count_approx (`tag_writer.py`)
-- **Business Glossary** with synonym links: cookie_id↔visitor_id,
-  hem↔hashed_email, brand↔advertiser, lat↔location_lat (`glossary_manager.py`)
-- **Column descriptions** from `metadata/*.yaml` applied via
-  `enrich-metadata` command
+## Metadata signals used by the agent
 
-The richer the metadata, the better the agent performs at schema discovery and
-SQL generation.
+The agent benefits from:
+- Dataplex catalog entries (table descriptions and display names)
+- Applied tags from `metadata/*.yaml`
+- Business glossary term links from `metadata/glossary.yaml`
+- Column descriptions applied by `enrich-metadata`
+
+Better metadata coverage generally improves SQL generation quality and reduces schema ambiguity.

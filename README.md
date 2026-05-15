@@ -1,112 +1,74 @@
-# Lakehouse Content — Marketing Data Platform
+# Lakehouse CLI
 
-This project has been create to deliver a synthetic, end-to-end Marketing Data Platform demonstration built to try and demonstrate the various features of  **Google Cloud Dataplex**, **BigQuery** and **BigLake** with **Apache Iceberg**.
-It relies on the terraform for an Analytics Lakhouse provided by google available here: https://github.com/GoogleCloudPlatform/terraform-google-analytics-lakehouse
+This repository provides a Python CLI for operating metadata and governance workflows for a marketing lakehouse on Google Cloud.
 
-The project contains a CLI to generate synthetic data which has been configured to produce a set of synthetic marketing tables.
-For more details on changing and extending the data generated see [Data Generation Guide](docs/data_generation.md)
+It focuses on Lakehouse REST Catalog verification, Dataplex catalog/glossary management, metadata enrichment, and Dataplex scan operations for profiling and quality.
 
-The CLI does also expose all tooling to set up and control dataplex metadata catalog, glossary and other services such data profiling, data quality services as well 
-vector search.
-For more details on this see [CLI Functionality](docs/cli_functionality.md)
+## Scope
 
+### What this project does
+- Verifies a BigLake Iceberg REST catalog and creates the Iceberg namespace
+- Registers Dataplex assets, entries, and tags for six marketing tables
+- Applies business glossary definitions from `metadata/glossary.yaml`
+- Enriches table and column descriptions from YAML and/or Dataplex insights
+- Creates/runs dataset insights, profiling scans, and data-quality scans
+- Bootstraps vector search, BQML Gemini, and continuous-query setup SQL
 
-## 🚀 Quick Start
+### What this project does not do
+- It does **not** generate synthetic data in this repository
+- It assumes the relevant BigQuery/Iceberg tables already exist
+
+## Prerequisites
+- Python 3.13+
+- `uv` for dependency management
+- Google Cloud SDK (`gcloud`) authenticated to your project
+- Required IAM roles for Dataplex, BigQuery, and BigLake operations
+
+Install dependencies:
 
 ```bash
-# Set your GCP project
-gcloud config set project your-project-id
-
-# Install dependencies
 uv sync
-
-# Run full generation and ingestion
-uv run python -m ingestion.cli ingest
 ```
 
-## 🔧 Lakehouse REST Catalog Setup
-
-The CLI supports setting up a BigLake Iceberg REST Catalog for cross-engine table discovery (BigQuery, Spark, Trino).
-
-### Prerequisites
+## Quick start
 
 ```bash
-# Enable required APIs
-gcloud services enable biglake.googleapis.com
-```
+# 1) Set the active GCP project (used as default by the CLI)
+gcloud config set project YOUR_PROJECT_ID
 
-### Create the Catalog (Vended Credentials Mode)
-
-> **gcloud limitation with vended-credentials**
->
-> For catalogs using **vended-credentials** mode, the gcloud CLI **cannot reliably create catalogs or register tables**. It does not properly send the `X-Iceberg-Access-Delegation: vended-credentials` header that BigLake requires in this mode.
->
-> | Operation | gcloud + vended-credentials | Workaround |
-> |-----------|----------------------------|------------|
-> | Create catalog | ❌ Does not work | **GCP Console** → BigLake > Iceberg catalogs > Create catalog |
-> | Register tables | ❌ Does not work | **This CLI** (uses Dataproc Spark) |
-
-**Step 1 — Create the catalog in the GCP Console**
-
-Navigate to: **BigLake > Iceberg catalogs > Create catalog**
-
-Choose:
-- Catalog type: **GCS bucket**
-- Credential mode: **Vended credentials**
-
-For more details, see: https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#process
-
-**Step 2 — Run the CLI to verify, create namespace, and register tables**
-
-### Run Setup via CLI
-
-```bash
-# Verify catalog, create namespace, and register tables
+# 2) Verify catalog and create namespace
 uv run python -m ingestion.cli setup-catalog \
-  --catalog-name YOUR-CATALOG-NAME \
+  --catalog-name YOUR_CATALOG_NAME \
   --full
+
+# 3) Register Dataplex assets/entries/tags/glossary
+uv run python -m ingestion.cli catalog \
+  --catalog-name YOUR_CATALOG_NAME
 ```
 
-### Table Registration with Vended Credentials
+## Command overview
+- `catalog`: Runs the cataloging pipeline (Dataplex topology, entries, tags, glossary)
+- `setup-catalog`: Verifies Lakehouse catalog and optionally creates namespace
+- `enrich-metadata`: Applies table/column descriptions
+- `create-templates`: Creates metadata/glossary template files
+- `manage-glossary`: Create/validate/apply/reset Dataplex glossary resources
+- `dataset-insights`: Creates/runs dataset-level Dataplex documentation scans
+- `profile`: Creates/runs Dataplex profile scans
+- `quality`: Compares/syncs/runs Dataplex data-quality scans from YAML rules
+- `vector-search`: Creates vector-search setup artifacts in BigQuery
+- `bqml-setup`: Creates BQML Gemini remote model setup artifacts
+- `continuous-queries`: Generates/executes continuous query setup (dry-run by default)
+- `reset`: Deletes namespace, glossary resources, and Dataplex entries (with `--confirm`)
 
-The CLI automatically registers tables via **Dataproc Serverless (Managed Service for Apache Spark)**, which properly handles the `X-Iceberg-Access-Delegation: vended-credentials` header. No manual steps required.
+Detailed usage and examples: `docs/cli_functionality.md`
 
-#### Registering External/Custom Tables
+## Documentation index
+- `docs/cli_functionality.md`: Full CLI reference and workflows
+- `docs/data-engineering-agent.md`: Using BigQuery Data Engineering Agent with this metadata model
+- `docs/iceberg_rest_implementations.md`: Notes on BigLake Iceberg catalog operational constraints
+- `docs/Intro_to_BigQuery_graph.md`: BigQuery Graph/PGQ modeling reference
 
-To register arbitrary pre-existing Iceberg tables (not the built-in synthetic tables):
-
-```bash
-uv run python -m ingestion.cli register-table \
-  --table-names my_table,another_table \
-  --metadata-locations gs://bucket/my_table/metadata.json,gs://bucket/another_table/metadata.json \
-  --catalog-name YOUR-CATALOG-NAME
-```
-
-- Use `setup-catalog --full` for the built-in tables (`audience`, `campaigns`, `pixel_events`, etc.)
-- Use `register-table` for any external tables with existing metadata files
-
-### Alternative: End-User Credentials Mode
-
-If you don't need credential vending, use end-user mode (gcloud CLI works fully):
-
-```bash
-gcloud biglake iceberg catalogs create YOUR-CATALOG-NAME \
-  --project=YOUR-PROJECT-ID \
-  --catalog-type=gcs-bucket \
-  --credential-mode=end-user
-```
-
-With end-user mode, `setup-catalog --full` will fully work including table registration.
-
-## 📦 Project Structure
-
-- `docs/` - Documentation files
-- `ingestion/` - CLI and ingestion logic
-- `generators/` - Data generation modules
-- `metadata/` - Table metadata and business glossary configurations
-
-## 🔗 Links
-
-- [Google Cloud Dataplex Documentation](https://cloud.google.com/dataplex)
-- [Apache Iceberg Documentation](https://iceberg.apache.org/)
-- [BigQuery BigLake Documentation](https://cloud.google.com/bigquery/docs/biglake-overview)
+## References
+- https://cloud.google.com/dataplex
+- https://cloud.google.com/bigquery/docs/biglake-overview
+- https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog
