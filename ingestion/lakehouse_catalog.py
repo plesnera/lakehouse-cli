@@ -11,7 +11,7 @@ Uses gcloud CLI for catalog/namespace operations.
 import subprocess
 from typing import Dict
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 class LakehouseCatalogManager:
@@ -23,7 +23,7 @@ class LakehouseCatalogManager:
     (CatalogManager.register_entries).
     """
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.project_id = config.data_project_id
         self.location = config.location

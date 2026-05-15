@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from google.cloud import bigquery
 from google.cloud import dataplex_v1
 from google.api_core.exceptions import NotFound, GoogleAPICallError
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 
@@ -39,7 +39,7 @@ class HybridMetadataEnricher:
 
     """
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = bigquery.Client(project=config.project_id)
         self.dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
@@ -515,6 +515,6 @@ class HybridMetadataEnricher:
 
 
 if __name__ == "__main__":
-    config = GeneratorConfig()
+    config = Config()
     enricher = HybridMetadataEnricher(config)
     enricher.generate_descriptions()

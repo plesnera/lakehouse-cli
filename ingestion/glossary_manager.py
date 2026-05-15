@@ -25,7 +25,7 @@ from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
 from google.protobuf import field_mask_pb2
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ class BusinessGlossaryManager:
     DEFAULT_GLOSSARY_DIR = "metadata"
     DEFAULT_GLOSSARY_FILE = "glossary.yaml"
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.glossary_client = dataplex_v1.BusinessGlossaryServiceClient()
         self.catalog_client = dataplex_v1.CatalogServiceClient()

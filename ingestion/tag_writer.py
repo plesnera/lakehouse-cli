@@ -3,12 +3,12 @@ import os
 import tempfile
 import json
 from google.protobuf import field_mask_pb2
-from generators.config import GeneratorConfig, TABLES
+from ingestion.config import Config, TABLES
 from google.cloud import dataplex_v1
 from ingestion.table_metadata import load_all_table_metadata
 
 class TagWriter:
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = dataplex_v1.CatalogServiceClient()
 

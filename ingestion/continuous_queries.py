@@ -8,13 +8,13 @@ Ref: https://cloud.google.com/bigquery/docs/continuous-queries
 
 from google.cloud import bigquery
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 class ContinuousQueryManager:
     """Generates and optionally executes continuous query SQL for the marketing lakehouse."""
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = bigquery.Client(project=config.project_id)
         self.dataset = f"{config.project_id}.{config.iceberg_namespace}"

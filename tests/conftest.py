@@ -14,7 +14,7 @@ import pytest
 # Ensure the project root is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 # ---------------------------------------------------------------------------
@@ -22,17 +22,9 @@ from generators.config import GeneratorConfig
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def test_config() -> GeneratorConfig:
+def test_config() -> Config:
     """A deterministic config for testing — no gcloud calls."""
-    return GeneratorConfig(
-        seed=42,
-        n_audience_participants=100,
-        n_audience_segments=10,
-        n_cookies=1000,
-        n_campaigns=10,
-        n_creatives_per_campaign=2,
-        n_pixel_events=5000,
-        n_transactions=1000,
+    return Config(
         data_project_id="test-data-project",
         catalog_project_id="test-catalog-project",
         iceberg_warehouse="gs://test-data-project-warehouse/iceberg",

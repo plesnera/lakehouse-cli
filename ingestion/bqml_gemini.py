@@ -8,13 +8,13 @@ Ref: https://cloud.google.com/bigquery/docs/generate-text-tutorial
 
 from google.cloud import bigquery
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 class BQMLGeminiManager:
     """Sets up BigQuery ML remote models for Gemini text generation and embedding."""
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = bigquery.Client(project=config.project_id)
         self.dataset = f"{config.project_id}.{config.iceberg_namespace}"

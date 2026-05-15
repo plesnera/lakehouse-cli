@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ingestion.lakehouse_catalog import LakehouseCatalogManager
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 class TestLakehouseCatalogManager:
@@ -15,7 +15,7 @@ class TestLakehouseCatalogManager:
 
     @pytest.fixture
     def config(self):
-        return GeneratorConfig(
+        return Config(
             data_project_id="test-project",
             location="us-east1",
             lakehouse_catalog_name="test-catalog",

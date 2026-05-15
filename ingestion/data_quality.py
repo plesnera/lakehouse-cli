@@ -8,7 +8,7 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-quality-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
-from generators.config import GeneratorConfig, TABLES
+from ingestion.config import Config, TABLES
 from ingestion.table_metadata import METADATA_DIR, load_all_table_metadata, RuleMeta
 
 
@@ -115,7 +115,7 @@ def load_dq_rules_from_md(metadata_dir: str = METADATA_DIR) -> dict[str, list[da
 class DataQualityManager:
     """Creates, syncs, and runs Dataplex data quality scans."""
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = dataplex_v1.DataScanServiceClient()
         self.parent = f"projects/{config.project_id}/locations/{config.location}"

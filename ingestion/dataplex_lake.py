@@ -1,8 +1,8 @@
 from google.cloud import dataplex_v1
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 class DataplexManager:
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = dataplex_v1.DataplexServiceClient()
 

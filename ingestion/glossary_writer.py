@@ -4,14 +4,14 @@ Retained for backward-compatibility with the ``catalog()`` CLI command.
 New code should use ``ingestion.glossary_manager.BusinessGlossaryManager`` directly.
 """
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 from ingestion.glossary_manager import BusinessGlossaryManager
 
 
 class GlossaryWriter:
     """Thin wrapper that delegates to :class:`BusinessGlossaryManager`."""
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self._manager = BusinessGlossaryManager(config)
 

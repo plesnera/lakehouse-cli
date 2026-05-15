@@ -10,13 +10,13 @@ from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
 import time
 
-from generators.config import GeneratorConfig, TABLES
+from ingestion.config import Config, TABLES
 
 
 class DataProfilingManager:
     """Creates and runs Dataplex data profile scans."""
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = dataplex_v1.DataScanServiceClient()
         self.parent = f"projects/{config.project_id}/locations/{config.location}"

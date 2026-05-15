@@ -19,7 +19,7 @@ import google.auth
 from google.auth.transport.requests import Request
 from google.cloud import bigquery
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
 
 class DatasetInsightsManager:
@@ -34,7 +34,7 @@ class DatasetInsightsManager:
     - Discovered primary/foreign key relationships
     """
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = bigquery.Client(project=config.project_id)
         self.dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
@@ -263,6 +263,6 @@ class DatasetInsightsManager:
 
 
 if __name__ == "__main__":
-    config = GeneratorConfig()
+    config = Config()
     mgr = DatasetInsightsManager(config)
     mgr.create_scan()

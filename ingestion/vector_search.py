@@ -8,9 +8,9 @@ Ref: https://cloud.google.com/bigquery/docs/vector-search-intro
 
 from google.cloud import bigquery
 
-from generators.config import GeneratorConfig
+from ingestion.config import Config
 
-# SQL templates use the BigLake connection already configured in GeneratorConfig.
+# SQL templates use the BigLake connection already configured in Config.
 _DATASET = "{project}.{namespace}"
 _CONNECTION = "{project}.{location}.biglake-conn"
 
@@ -18,7 +18,7 @@ _CONNECTION = "{project}.{location}.biglake-conn"
 class VectorSearchManager:
     """Manages BigQuery Vector Search setup for the marketing lakehouse."""
 
-    def __init__(self, config: GeneratorConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.client = bigquery.Client(project=config.project_id)
         self.dataset = f"{config.project_id}.{config.iceberg_namespace}"

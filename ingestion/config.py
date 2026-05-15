@@ -1,31 +1,10 @@
 from pydantic import BaseModel, Field
-from typing import Dict, List
+from typing import List
 import subprocess
 import os
 
-class MarketMatchRates(BaseModel):
-    txn_cookie_fill_rate: float
-    txn_hem_fill_rate: float
 
-# Production-scale defaults matching Agent.md spec
-FULL_SCALE = {
-    "n_audience_participants": 8_000,
-    "n_audience_segments":   500,
-    "n_cookies":  80_000,
-    "n_campaigns": 200,
-    "n_creatives_per_campaign": 5,
-    "n_pixel_events":  2_000_000,
-    "n_transactions": 500_000,
-}
-
-# Fictional brands from Agent.md
-BRANDS = ["Lucky Cola", "Force Automotive", "AEKI Living"]
-
-
-class GeneratorConfig(BaseModel):
-    seed: int = 42
-    target_markets: List[str] = ["US", "GB", "JP"]
-
+class Config(BaseModel):
     @staticmethod
     def get_current_gcloud_project() -> str:
         """Get the current gcloud project or return None if not available."""
@@ -41,53 +20,27 @@ class GeneratorConfig(BaseModel):
                 return result.stdout.strip()
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             pass
-        
+
         # Fallback to environment variable
         return os.environ.get("GOOGLE_CLOUD_PROJECT", "wpp-dataproducts-lakehouse")
 
-    # Scale — dev defaults for fast iteration; use FULL_SCALE for demo
-    n_audience_participants: int = 100
-    n_audience_segments: int = 10
-    n_cookies: int = 1000
-    n_campaigns: int = 10
-    n_creatives_per_campaign: int = 2
-    n_pixel_events: int = 5000
-    n_transactions: int = 1000
-    date_range_days: int = 365
-
-    # Match-rate controls — baseline rates
-    audience_hem_fill_rate: float = 0.60
-    cookie_audience_fill_rate: float = 0.40
-    cookie_hem_fill_rate: float = 0.35
-    pixel_cookie_fill_rate: float = 0.82
-    txn_cookie_fill_rate: float = 0.25     # baseline; overridden per market
-    txn_hem_fill_rate: float = 0.20        # baseline; overridden per market
-
-    # Per-market overrides for transaction join rates
-    # US: baseline +5pp, UK: baseline -5pp, JP: baseline -10pp
-    market_txn_rates: Dict[str, MarketMatchRates] = {
-        "US": MarketMatchRates(txn_cookie_fill_rate=0.30, txn_hem_fill_rate=0.25),
-        "GB": MarketMatchRates(txn_cookie_fill_rate=0.20, txn_hem_fill_rate=0.15),
-        "JP": MarketMatchRates(txn_cookie_fill_rate=0.15, txn_hem_fill_rate=0.10),
-    }
-
     # Project configuration - supports cross-project scenarios
     data_project_id: str = Field(
-        default_factory=lambda: GeneratorConfig.get_current_gcloud_project(),
+        default_factory=lambda: Config.get_current_gcloud_project(),
         description="GCP project where data is stored (GCS, Iceberg)"
     )
     catalog_project_id: str = Field(
-        default_factory=lambda: GeneratorConfig.get_current_gcloud_project(), 
+        default_factory=lambda: Config.get_current_gcloud_project(),
         description="GCP project where Dataplex catalog resides"
     )
 
     # Storage configuration
     iceberg_warehouse: str = Field(
-        default_factory=lambda: f"gs://{GeneratorConfig.get_current_gcloud_project()}-warehouse/iceberg",
+        default_factory=lambda: f"gs://{Config.get_current_gcloud_project()}-warehouse/iceberg",
         description="GCS path for Iceberg data (can be different project)"
     )
     iceberg_namespace: str = "marketing"
-    
+
     # Connection configuration - template with project placeholder
     biglake_connection: str = Field(
         default="projects/{project_id}/locations/{location}/connections/biglake-conn",
@@ -99,7 +52,7 @@ class GeneratorConfig(BaseModel):
         default="",
         description="Lakehouse REST catalog name (REQUIRED - no default, must be explicit)"
     )
-    
+
     # Location configuration
     location: str = "us-east1"
 
@@ -108,7 +61,7 @@ class GeneratorConfig(BaseModel):
         default="dataproc-subnet",
         description="VPC subnet for Dataproc Serverless jobs"
     )
-    
+
     # Backward compatibility property
     @property
     def project_id(self) -> str:

@@ -1,7 +1,5 @@
 import typer
-from generators.config import GeneratorConfig, TABLES
-from generators.orchestrator import Orchestrator
-from ingestion.iceberg_writer import IcebergWriter
+from ingestion.config import Config, TABLES
 from ingestion.dataplex_lake import DataplexManager
 from ingestion.catalog import CatalogManager
 from ingestion.tag_writer import TagWriter
@@ -15,43 +13,10 @@ from ingestion.dataset_insights import DatasetInsightsManager
 from ingestion.vector_search import VectorSearchManager
 from ingestion.bqml_gemini import BQMLGeminiManager
 from ingestion.continuous_queries import ContinuousQueryManager
-import os
 
 app = typer.Typer()
 
-@app.command()
-def generate(
-    local: bool = True,
-    full_scale: bool = typer.Option(False, "--full-scale", help="Use production-scale row counts from Agent.md (8K audience, 80K cookies, 2M events, etc.)"),
-    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
-    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
-):
-    from generators.config import FULL_SCALE
-    config = GeneratorConfig(**FULL_SCALE) if full_scale else GeneratorConfig()
-    
-    # Apply cross-project configuration if provided
-    if data_project:
-        config.data_project_id = data_project
-    if iceberg_warehouse:
-        config.iceberg_warehouse = iceberg_warehouse
-    
-    orchestrator = Orchestrator(config)
-    
-    if local:
-        os.makedirs("local_output", exist_ok=True)
-        # For local, we still aggregate for simple parquet write, or we could write multiple files
-        # Let's aggregate for local demo
-        tables = orchestrator.generate_all()
-        for name, table in tables.items():
-            path = f"local_output/{name}.parquet"
-            pq.write_table(table, path)
-            print(f"Saved {name} to {path}")
-    else:
-        # Streamed GCP write
-        writer = IcebergWriter(config)
-        writer.write_stream(orchestrator.generate_all_streamed())
-
-def _run_catalog(config: GeneratorConfig):
+def _run_catalog(config: Config):
     """Internal helper to run the full cataloging process."""
     # 0. Validate catalog name is set
     if not config.lakehouse_catalog_name:
@@ -108,7 +73,7 @@ def catalog(
 
     Supports cross-project scenarios where data and catalog reside in different projects.
     """
-    config = GeneratorConfig()
+    config = Config()
 
     # Apply cross-project configuration if provided
     if data_project:
@@ -144,7 +109,7 @@ def setup_catalog(
     2. Creates the namespace (if missing)
 
     Table registration is handled by Dataplex catalog entries
-    (via ``catalog`` or ``ingest`` commands).
+    (via ``catalog`` command).
 
     Examples:
         # Preview what would be done
@@ -156,7 +121,7 @@ def setup_catalog(
         # Verify catalog only (no namespace)
         uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse
     """
-    config = GeneratorConfig()
+    config = Config()
 
     # Apply catalog name if provided
     if catalog_name:
@@ -184,11 +149,11 @@ def enrich_metadata(
 ):
     """
     Generate and apply table/column descriptions using hybrid or Google-only approach.
-    
+
     This command offers two modes:
     1. Manual : Use manual YAML metadata files instead of Google Insights
     2. Google Insights Only: Use pure Google Dataplex-style automated metadata generation
-    
+
     Examples:
         # Mode 1: Manual approach
         # Enrich all tables (uses default YAML files if they exist)
@@ -216,19 +181,19 @@ def enrich_metadata(
         # Create YAML metadata templates for manual descriptions
         uv run python -m ingestion.cli create-templates
     """
-    config = GeneratorConfig()
+    config = Config()
     enricher = HybridMetadataEnricher(config)
-    
+
     if table_names:
         # Convert comma-separated strings to lists
         tables_to_enrich = [t.strip() for t in table_names.split(',')]
-        
+
         # Check if using Google insights (no metadata files needed)
         if google_insights:
             print(f"Enriching metadata for specific tables using Google insights:")
             for table in tables_to_enrich:
                 print(f"  {table} (Google insights)")
-            
+
             # Use Google insights only (no manual files)
             enricher.generate_descriptions_for_tables_with_google_insights(tables_to_enrich, timeout=300, dry_run=dry_run)
         else:
@@ -238,18 +203,18 @@ def enrich_metadata(
                 print("Example: --table-names audience,campaigns --metadata-files audience.yaml,campaigns.yaml")
                 print("Or use: --table-names audience --google-insights")
                 return
-            
+
             metadata_files_list = [m.strip() for m in metadata_files.split(',')]
-            
+
             # Validate that the number of tables matches the number of metadata files
             if len(tables_to_enrich) != len(metadata_files_list):
                 print(f"❌ Error: Number of table names ({len(tables_to_enrich)}) does not match number of metadata files ({len(metadata_files_list)})")
                 return
-            
+
             print(f"Enriching metadata for specific tables with manual files:")
             for table, metadata_file in zip(tables_to_enrich, metadata_files_list):
                 print(f"  {table} <- {metadata_file}")
-            
+
             # Use the explicit metadata files
             enricher.generate_descriptions_for_tables_with_files(tables_to_enrich, metadata_files_list, timeout=300, dry_run=dry_run, use_google_insights=False)
     else:
@@ -264,20 +229,20 @@ def enrich_metadata(
 def create_templates():
     """
     Create template files for metadata and glossary management.
-    
+
     This command creates template files for both metadata descriptions and
     business glossary definitions that you can edit before running enrichment.
-    
+
     Example:
         uv run python -m ingestion.cli create-templates
     """
-    config = GeneratorConfig()
+    config = Config()
     enricher = HybridMetadataEnricher(config)
     glossary_manager = BusinessGlossaryManager(config)
-    
+
     # Create metadata templates
     enricher.create_all_templates()
-    
+
     # Create glossary templates
     glossary_manager.generate_template_files()
 
@@ -314,7 +279,7 @@ def manage_glossary(
         # Link terms to BigQuery assets
         uv run python -m ingestion.cli manage-glossary --action apply
     """
-    config = GeneratorConfig()
+    config = Config()
     glossary_manager = BusinessGlossaryManager(config)
 
     if reset:
@@ -331,115 +296,6 @@ def manage_glossary(
             glossary_manager.reset_glossary(input_path=input)
     else:
         print(f"❌ Unknown action: {action}. Use create, validate, apply, or reset.")
-
-@app.command()
-def ingest(
-    data_project: str = typer.Option(None, "--data-project", help="GCP project where data is stored (GCS, Iceberg)"),
-    catalog_project: str = typer.Option(None, "--catalog-project", help="GCP project where Dataplex catalog resides"),
-    iceberg_warehouse: str = typer.Option(None, "--iceberg-warehouse", help="GCS path for Iceberg data"),
-    biglake_connection: str = typer.Option(None, "--biglake-connection", help="BigLake connection template"),
-    catalog_name: str = typer.Option(None, "--catalog-name", help="Lakehouse REST catalog name (required)"),
-):
-    print("Starting full streamed ingestion...")
-    config = GeneratorConfig()
-    if data_project:
-        config.data_project_id = data_project
-    if catalog_project:
-        config.catalog_project_id = catalog_project
-    if iceberg_warehouse:
-        config.iceberg_warehouse = iceberg_warehouse
-    if biglake_connection:
-        config.biglake_connection = biglake_connection
-    if catalog_name:
-        config.lakehouse_catalog_name = catalog_name
-
-    orchestrator = Orchestrator(config)
-    writer = IcebergWriter(config)
-
-    # 1. Generate & Write Streamed
-    writer.write_stream(orchestrator.generate_all_streamed())
-
-    # 2. Register Catalog
-    _run_catalog(config)
-    print("Ingestion complete.")
-
-@app.command()
-def validate(local: bool = True):
-    print("Running validation checks...")
-    config = GeneratorConfig()
-    
-    if local:
-        import pyarrow.parquet as pq
-        for name in TABLES:
-            path = f"local_output/{name}.parquet"
-            if not os.path.exists(path):
-                print(f"FAILED: Local file {path} missing.")
-                continue
-            
-            import pyarrow.parquet as pq
-            table = pq.read_table(path)
-            print(f"Checking {name} ({len(table)} rows)...")
-            
-            # Row count check
-            expected = {
-                "audience": config.n_audience_participants,
-                "cookie_registry": config.n_cookies,
-                "campaigns": config.n_campaigns,
-                "creatives": config.n_campaigns * config.n_creatives_per_campaign,
-                "pixel_events": config.n_pixel_events,
-                "transactions": config.n_transactions
-            }
-            if len(table) != expected[name]:
-                print(f"  WARNING: Row count mismatch. Expected {expected[name]}, got {len(table)}")
-
-            # ---- Validation checks per table ----
-            def _fill_rate(col_data):
-                return sum(1 for x in col_data if x is not None) / len(col_data) if col_data else 0
-
-            def _check_rate(label, actual, target, tolerance=0.03):
-                print(f"  {label}: {actual:.1%} (target {target:.0%})")
-                if abs(actual - target) > tolerance:
-                    print(f"  FAILED: {label} {actual:.1%} outside +/- 3pp of {target:.0%}")
-
-            def _check_synonym(col_a_name, col_b_name):
-                a = table.column(col_a_name).to_pylist()
-                b = table.column(col_b_name).to_pylist()
-                if a != b:
-                    print(f"  FAILED: {col_a_name} != {col_b_name}")
-                else:
-                    print(f"  OK: {col_a_name} == {col_b_name}")
-
-            if name == "audience":
-                _check_rate("audience.hem fill", _fill_rate(table.column("hem").to_pylist()), config.audience_hem_fill_rate)
-                _check_synonym("lat", "location_lat")
-                _check_synonym("lon", "location_lon")
-
-            if name == "cookie_registry":
-                _check_synonym("cookie_id", "visitor_id")
-                _check_synonym("hem", "hashed_email")
-                _check_rate("cookie->audience fill", _fill_rate(table.column("audience_id").to_pylist()), config.cookie_audience_fill_rate)
-                _check_rate("cookie->hem fill", _fill_rate(table.column("hem").to_pylist()), config.cookie_hem_fill_rate)
-
-            if name == "campaigns":
-                _check_synonym("brand", "advertiser")
-
-            if name == "pixel_events":
-                _check_rate("pixel->cookie fill", _fill_rate(table.column("cookie_id").to_pylist()), config.pixel_cookie_fill_rate)
-
-            if name == "transactions":
-                # Per-market transaction rates
-                import pyarrow.compute as pc
-                for market, rates in config.market_txn_rates.items():
-                    mask = pc.equal(table.column("country_code"), market)
-                    market_table = table.filter(mask)
-                    if len(market_table) == 0:
-                        continue
-                    c_rate = _fill_rate(market_table.column("cookie_id").to_pylist())
-                    h_rate = _fill_rate(market_table.column("hem").to_pylist())
-                    _check_rate(f"txn->cookie ({market})", c_rate, rates.txn_cookie_fill_rate)
-                    _check_rate(f"txn->hem ({market})", h_rate, rates.txn_hem_fill_rate)
-
-    print("Validation checks finished.")
 
 
 @app.command()
@@ -470,7 +326,7 @@ def dataset_insights(
         # Explicitly run scan
         uv run python -m ingestion.cli dataset-insights --run
     """
-    config = GeneratorConfig()
+    config = Config()
     mgr = DatasetInsightsManager(config)
 
     if results:
@@ -487,7 +343,7 @@ def profile(
     results: bool = typer.Option(False, "--results", help="Show latest profiling results instead of creating scans"),
 ):
     """Create and run Dataplex data profile scans for all tables."""
-    config = GeneratorConfig()
+    config = Config()
     mgr = DataProfilingManager(config)
     if results:
         mgr.get_results()
@@ -531,7 +387,7 @@ def quality(
         # View results of previous runs
         uv run python -m ingestion.cli quality --results
     """
-    config = GeneratorConfig()
+    config = Config()
     mgr = DataQualityManager(config)
 
     # Parse table names if provided
@@ -558,7 +414,7 @@ def vector_search(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print SQL without executing"),
 ):
     """Set up BigQuery Vector Search: embedding model, embeddings, vector index, and example query."""
-    config = GeneratorConfig()
+    config = Config()
     mgr = VectorSearchManager(config)
     mgr.setup(dry_run=dry_run)
 
@@ -568,7 +424,7 @@ def bqml_setup(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print SQL without executing"),
 ):
     """Set up BigQuery ML Gemini remote model and run example text generation queries."""
-    config = GeneratorConfig()
+    config = Config()
     mgr = BQMLGeminiManager(config)
     mgr.setup(dry_run=dry_run)
 
@@ -578,7 +434,7 @@ def continuous_queries(
     dry_run: bool = typer.Option(True, help="Print SQL without executing (default: True, requires Enterprise reservation)"),
 ):
     """Set up BigQuery continuous query for real-time CTR aggregation on pixel_events."""
-    config = GeneratorConfig()
+    config = Config()
     mgr = ContinuousQueryManager(config)
     mgr.setup(dry_run=dry_run)
 
@@ -589,16 +445,15 @@ def reset(
 ):
     """Tear down all generated resources for a clean re-run.
 
-    Deletes: Lakehouse REST catalog, BQ external tables, Dataplex entries/tags,
-    glossary resources, and Iceberg catalog entries. Does NOT delete GCS data.
+    Deletes: Lakehouse REST catalog, Dataplex entries/tags, and glossary resources.
+    Does NOT delete GCS data.
     """
     if not confirm:
         print("⚠️  This will delete all marketing lakehouse resources.")
         print("   Pass --confirm to proceed.")
         return
 
-    config = GeneratorConfig()
-    from google.cloud import bigquery
+    config = Config()
 
     # 1. Delete Lakehouse namespace (catalog itself must be deleted manually)
     print("Deleting Lakehouse namespace...")
@@ -612,16 +467,7 @@ def reset(
     #   gcloud biglake iceberg catalogs delete <name> --project=<project>
     print("  (Catalog not deleted - remove manually if needed)")
 
-    # 2. Delete BQ external tables
-    print("Deleting BigQuery external tables...")
-    bq_client = bigquery.Client(project=config.project_id)
-    dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
-    for name in TABLES:
-        table_id = f"{dataset_id}.{name}"
-        bq_client.delete_table(table_id, not_found_ok=True)
-        print(f"  Deleted BQ table: {name}")
-
-    # 3. Reset glossary
+    # 2. Reset glossary
     print("Resetting glossary...")
     glossary_mgr = BusinessGlossaryManager(config)
     try:
@@ -629,7 +475,7 @@ def reset(
     except Exception as e:
         print(f"  ⚠️  Glossary reset: {e}")
 
-    # 4. Delete catalog entries
+    # 3. Delete catalog entries
     print("Deleting catalog entries...")
     from google.cloud import dataplex_v1
     catalog_client = dataplex_v1.CatalogServiceClient()
@@ -639,11 +485,6 @@ def reset(
             print(f"  Deleted entry: {name}")
         except Exception:
             pass
-
-    # 5. Reset local Iceberg catalog
-    if os.path.exists("iceberg_catalog.db"):
-        os.remove("iceberg_catalog.db")
-        print("  Deleted local Iceberg catalog")
 
     print("✅ Reset complete.")
 
