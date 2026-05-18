@@ -22,7 +22,7 @@ class Config(BaseModel):
             pass
 
         # Fallback to environment variable
-        return os.environ.get("GOOGLE_CLOUD_PROJECT", "wpp-dataproducts-lakehouse")
+        return os.environ.get("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
 
     # Project configuration - supports cross-project scenarios
     data_project_id: str = Field(
@@ -39,7 +39,7 @@ class Config(BaseModel):
         default_factory=lambda: f"gs://{Config.get_current_gcloud_project()}-warehouse/iceberg",
         description="GCS path for Iceberg data (can be different project)"
     )
-    iceberg_namespace: str = "marketing"
+    iceberg_namespace: str = "my-iceberg-namespace"
 
     # Connection configuration - template with project placeholder
     biglake_connection: str = Field(
@@ -89,5 +89,6 @@ class Config(BaseModel):
         return f"//bigquery.googleapis.com/projects/{self.project_id}/datasets/{self.iceberg_namespace}/tables/{table}"
 
 
-# Table list - single source of truth for all tables in the lakehouse
+# Table list - references the single source of truth for all tables in the lakehouse
+# and is used to control the files read from the metadata repository.
 TABLES = ["audience", "cookie_registry", "campaigns", "creatives", "pixel_events", "transactions"]

@@ -3,6 +3,8 @@
 This repository provides a Python CLI for operating metadata and governance workflows for a marketing lakehouse on Google Cloud.
 
 It focuses on Lakehouse REST Catalog verification, Dataplex catalog/glossary management, metadata enrichment, and Dataplex scan operations for profiling and quality.
+It comes with a preset configurations and files in the metadata directory for 6 marketing tables as well as a business glossary.
+All configuration can be changed in the config.py - will most likely change to a better config in next update.
 
 ## Scope
 
