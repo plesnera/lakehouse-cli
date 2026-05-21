@@ -337,7 +337,8 @@ class BusinessGlossaryManager:
         # 4. Update terms with links (second pass)
         self._update_term_links(glossary_def, term_names)
 
-        
+        # 5. Bind glossary terms to catalog entries (tables)
+        self.apply_glossary_to_assets(input_path=path)
 
         print("✅ Glossary creation complete.")
 
