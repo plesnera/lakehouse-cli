@@ -258,6 +258,66 @@ uv run python -m ingestion.cli continuous-queries
 uv run python -m ingestion.cli continuous-queries --dry-run false
 ```
 
+### `list-related-entries`
+Finds catalog entries whose schema contains a column matching a given glossary term.
+
+Given a glossary term (e.g. `advertiser`), searches all Dataplex catalog entries and returns those that contain a matching column, along with the Resource Name, Column Name, Project, and Fully Qualified Name.
+
+```bash
+# Search for all entries with a column matching 'advertiser'
+uv run python -m ingestion.cli list-related-entries --term advertiser
+
+# Specify a glossary
+uv run python -m ingestion.cli list-related-entries --term brand \
+  --glossary marketing-business-glossary
+```
+
+Options:
+- `--term` (required): glossary term to search for (e.g. `advertiser`)
+- `--glossary`: glossary ID or display name (default: first glossary found)
+
+### `scan-for-related-entries`
+Compares a BigLake catalog against a glossary to find matching and unmatched terms using exact, synonym, and fuzzy semantic matching.
+
+This command scans all table columns in the specified BigLake catalog and matches them against glossary terms. It produces a two-phase report:
+
+- **Phase A — Exact & Synonym Matches**: terms that have a direct column name match or match via a synonym relationship defined in the glossary.
+- **Phase B — Fuzzy Semantic Proposals**: for terms with no exact match, a keyword-based scoring system proposes candidate columns based on the term's description. Columns are scored by exact keyword match (+10), substring match (+5), and table-name match (+3).
+
+```bash
+# Scan catalog against default glossary
+uv run python -m ingestion.cli scan-for-related-entries \
+  --catalog wpp-dataproducts-lakehouse-warehouse
+
+# Scan with namespace filter
+uv run python -m ingestion.cli scan-for-related-entries \
+  --catalog wpp-dataproducts-lakehouse-warehouse \
+  --namespace marketing
+
+# Specify glossary explicitly
+uv run python -m ingestion.cli scan-for-related-entries \
+  --catalog wpp-dataproducts-lakehouse-warehouse \
+  --glossary marketing-business-glossary
+```
+
+Options:
+- `--catalog` (required): BigLake catalog name to scan
+- `--namespace`: optional namespace filter within the catalog
+- `--glossary`: glossary ID or display name (default: first glossary found)
+
+#### Workflow for `scan-for-related-entries`
+
+Below is a step-by-step description of what happens when you run the command:
+
+1. **Glossary discovery** — The CLI resolves the glossary (either the one specified via `--glossary` or the first glossary in the project/location). It lists all terms and their categories.
+2. **BigLake entry listing** — All entries in the `@biglake` entry group are listed. Only table-type entries are kept; optionally filtered to a single namespace via `--namespace`.
+3. **Schema extraction** — For each table entry, the CLI fetches the full entry description (including schema aspects) and extracts all column names.
+4. **Phase A — Exact & synonym matching** — Each glossary term is compared against the extracted column names:
+   - A direct match occurs when the normalized term name equals a normalized column name.
+   - Synonym matching checks whether a term's description starts with "Synonym for <canonical-term>" and inherits the canonical term's match if one exists.
+5. **Phase B — Fuzzy semantic matching** — Terms not matched in Phase A are processed by tokenizing their description into keywords (filtering stop words). Each column/table is scored against those keywords. Proposals are sorted by score (highest first) so the most likely matches appear at the top.
+6. **Report output** — A summary is printed showing glossary and catalog statistics, the Phase A matches table, and the Phase B proposals table with scores and match rationale.
+
 ### `reset`
 Deletes generated metadata resources for a clean re-run.
 
@@ -277,3 +337,4 @@ Behavior:
 - Metadata parsing: `ingestion/table_metadata.py`
 - Glossary manager: `ingestion/glossary_manager.py`
 - Data quality manager: `ingestion/data_quality.py`
+- Related entries manager: `ingestion/related_entries.py`
