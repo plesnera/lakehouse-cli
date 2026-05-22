@@ -13,6 +13,7 @@ from ingestion.dataset_insights import DatasetInsightsManager
 from ingestion.vector_search import VectorSearchManager
 from ingestion.bqml_gemini import BQMLGeminiManager
 from ingestion.continuous_queries import ContinuousQueryManager
+from ingestion.related_entries import RelatedEntriesManager
 
 app = typer.Typer()
 
@@ -437,6 +438,67 @@ def continuous_queries(
     config = Config()
     mgr = ContinuousQueryManager(config)
     mgr.setup(dry_run=dry_run)
+
+
+@app.command()
+def list_related_entries(
+    term: str = typer.Option(..., "--term", help="Glossary term to search for (e.g., 'advertiser')"),
+    glossary: str = typer.Option(None, "--glossary", help="Glossary ID or display name (default: first glossary found)"),
+):
+    """Find catalog entries whose schema contains a column matching a glossary term.
+
+    Given a glossary term (e.g. 'advertiser'), returns all data entries that
+    contain a matching column with Resource Name, Column Name, Project, and
+    Fully Qualified Name.
+
+    Examples:
+        # Search for all entries with a column matching 'advertiser'
+        uv run python -m ingestion.cli list-related-entries --term advertiser
+
+        # Specify a glossary
+        uv run python -m ingestion.cli list-related-entries --term brand \\
+          --glossary marketing-business-glossary
+    """
+    config = Config()
+    mgr = RelatedEntriesManager(config)
+    mgr.list_related_entries(term_name=term, glossary=glossary)
+
+
+@app.command()
+def scan_for_related_entries(
+    catalog: str = typer.Option(..., "--catalog", help="BigLake catalog name to scan"),
+    namespace: str = typer.Option(None, "--namespace", help="Optional namespace filter within the catalog"),
+    glossary: str = typer.Option(None, "--glossary", help="Glossary ID or display name (default: first glossary found)"),
+):
+    """Compare a BigLake catalog against a glossary to find matching and unmatched terms.
+
+    Scans all table columns in the BigLake catalog and matches them against
+    glossary terms using exact, synonym, and fuzzy semantic matching.
+
+    Output includes:
+    - Phase A: terms with exact column matches (already matched)
+    - Phase B: fuzzy semantic proposals for unmatched terms
+
+    Examples:
+        # Scan default catalog against default glossary
+        uv run python -m ingestion.cli scan-for-related-entries \\
+          --catalog wpp-dataproducts-lakehouse-warehouse
+
+        # Scan with namespace filter
+        uv run python -m ingestion.cli scan-for-related-entries \\
+          --catalog wpp-dataproducts-lakehouse-warehouse \\
+          --namespace marketing
+
+        # Specify glossary explicitly
+        uv run python -m ingestion.cli scan-for-related-entries \\
+          --catalog wpp-dataproducts-lakehouse-warehouse \\
+          --glossary marketing-business-glossary
+    """
+    config = Config()
+    mgr = RelatedEntriesManager(config)
+    mgr.scan_for_related_entries(
+        catalog_name=catalog, namespace=namespace, glossary=glossary
+    )
 
 
 @app.command()
