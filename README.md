@@ -60,6 +60,8 @@ uv run python -m ingestion.cli catalog \
 - `vector-search`: Creates vector-search setup artifacts in BigQuery
 - `bqml-setup`: Creates BQML Gemini remote model setup artifacts
 - `continuous-queries`: Generates/executes continuous query setup (dry-run by default)
+- `list-related-entries`: Finds catalog entries whose schema contains a column matching a glossary term
+- `scan-for-related-entries`: Compares a BigLake catalog against a glossary to find matching and unmatched terms
 - `reset`: Deletes namespace, glossary resources, and Dataplex entries (with `--confirm`)
 
 Detailed usage and examples: `docs/cli_functionality.md`
