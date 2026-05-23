@@ -62,6 +62,7 @@ uv run python -m ingestion.cli catalog \
 - `continuous-queries`: Generates/executes continuous query setup (dry-run by default)
 - `list-related-entries`: Finds catalog entries whose schema contains a column matching a glossary term
 - `scan-for-related-entries`: Compares a BigLake catalog against a glossary to find matching and unmatched terms
+- `apply-related-entries`: Applies curated related-entry proposals from a YAML file to Dataplex Catalog
 - `reset`: Deletes namespace, glossary resources, and Dataplex entries (with `--confirm`)
 
 Detailed usage and examples: `docs/cli_functionality.md`

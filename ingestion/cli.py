@@ -469,6 +469,7 @@ def scan_for_related_entries(
     catalog: str = typer.Option(..., "--catalog", help="BigLake catalog name to scan"),
     namespace: str = typer.Option(None, "--namespace", help="Optional namespace filter within the catalog"),
     glossary: str = typer.Option(None, "--glossary", help="Glossary ID or display name (default: first glossary found)"),
+    output: str = typer.Option(None, "--output", "-o", help="Write proposals to a YAML file for curation and later apply"),
 ):
     """Compare a BigLake catalog against a glossary to find matching and unmatched terms.
 
@@ -478,6 +479,10 @@ def scan_for_related_entries(
     Output includes:
     - Phase A: terms with exact column matches (already matched)
     - Phase B: fuzzy semantic proposals for unmatched terms
+
+    When --output is provided, Phase B proposals are written to a YAML file
+    that can be curated (rows removed or commented out) and then applied
+    with ``apply-related-entries``.
 
     Examples:
         # Scan default catalog against default glossary
@@ -493,11 +498,69 @@ def scan_for_related_entries(
         uv run python -m ingestion.cli scan-for-related-entries \\
           --catalog wpp-dataproducts-lakehouse-warehouse \\
           --glossary marketing-business-glossary
+
+        # Export proposals to YAML for curation
+        uv run python -m ingestion.cli scan-for-related-entries \\
+          --catalog wpp-dataproducts-lakehouse-warehouse \\
+          --namespace marketing \\
+          --output proposals.yaml
     """
     config = Config()
     mgr = RelatedEntriesManager(config)
-    mgr.scan_for_related_entries(
+    _exact, fuzzy = mgr.scan_for_related_entries(
         catalog_name=catalog, namespace=namespace, glossary=glossary
+    )
+
+    if output:
+        # Resolve glossary ID for the export metadata
+        glossary_info = mgr._discover_glossary(glossary)
+        glossary_id = glossary_info["name"].rsplit("/", 1)[-1]
+        mgr.export_proposals_yaml(
+            fuzzy_proposals=fuzzy,
+            output_path=output,
+            catalog_name=catalog,
+            namespace=namespace,
+            glossary_id=glossary_id,
+        )
+
+
+@app.command()
+def apply_related_entries(
+    input: str = typer.Option(..., "--input", help="Path to curated proposals YAML/JSON file"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate and preview; do not mutate"),
+    glossary: str = typer.Option(None, "--glossary", help="Override glossary ID from the file"),
+    project: str = typer.Option(None, "--project", help="Override the Google Cloud project"),
+    location: str = typer.Option(None, "--location", help="Override the location (default: from file or us-east1)"),
+):
+    """Apply curated related-entry proposals from a YAML file.
+
+    Reads a proposals file (produced by ``scan-for-related-entries --output``),
+    validates each proposal, and creates related-entry links in Dataplex Catalog.
+
+    The command is idempotent: existing relations are skipped with an
+    informational message rather than duplicated.
+
+    Examples:
+        # Preview changes
+        uv run python -m ingestion.cli apply-related-entries \\
+          --input proposals.yaml --dry-run
+
+        # Execute
+        uv run python -m ingestion.cli apply-related-entries \\
+          --input proposals.yaml
+
+        # Override glossary
+        uv run python -m ingestion.cli apply-related-entries \\
+          --input proposals.yaml --glossary my-glossary
+    """
+    config = Config()
+    mgr = RelatedEntriesManager(config)
+    mgr.apply_proposals(
+        input_path=input,
+        dry_run=dry_run,
+        glossary_override=glossary,
+        project_override=project,
+        location_override=location,
     )
 
 
