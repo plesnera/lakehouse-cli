@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ingestion.related_entries import (
+    ApplyResult,
     ExactMatch,
     FuzzyProposal,
     RelatedEntriesManager,
@@ -364,3 +365,261 @@ class TestPhaseBMatching:
         # Should be sorted descending by score
         scores = [p.score for p in proposals]
         assert scores == sorted(scores, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# export_proposals_yaml / load_proposals_yaml
+# ---------------------------------------------------------------------------
+
+class TestExportAndLoadProposalsYaml:
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="test-project",
+            catalog_project_id="test-project",
+            location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def _sample_proposals(self) -> list:
+        return [
+            FuzzyProposal(
+                term_name="impression",
+                category="Marketing Metrics",
+                description="A single instance of an ad being served.",
+                table_column="pixel_events.event_type",
+                score=45,
+                rationale="exact:event_type",
+            ),
+            FuzzyProposal(
+                term_name="roas",
+                category="Marketing Metrics",
+                description="Return On Ad Spend.",
+                table_column="transactions.amount_usd",
+                score=30,
+                rationale="substr:amount",
+            ),
+        ]
+
+    def test_round_trip(self, tmp_path):
+        """Export proposals to YAML, then load them back."""
+        mgr = self._make_manager()
+        output_file = str(tmp_path / "proposals.yaml")
+
+        mgr.export_proposals_yaml(
+            fuzzy_proposals=self._sample_proposals(),
+            output_path=output_file,
+            catalog_name="my-catalog",
+            namespace="marketing",
+            glossary_id="marketing-glossary",
+        )
+
+        doc = RelatedEntriesManager.load_proposals_yaml(output_file)
+
+        assert doc["scan"]["catalog"] == "my-catalog"
+        assert doc["scan"]["namespace"] == "marketing"
+        assert doc["scan"]["glossary"] == "marketing-glossary"
+        assert doc["scan"]["glossary_location"] == "us-east1"
+        assert doc["scan"]["glossary_project"] == "test-project"
+        assert "scanned_at" in doc["scan"]
+
+        assert len(doc["proposals"]) == 2
+        assert doc["proposals"][0]["glossary_term"] == "impression"
+        assert doc["proposals"][0]["table"] == "pixel_events"
+        assert doc["proposals"][0]["column"] == "event_type"
+        assert doc["proposals"][0]["match_score"] == 45
+        assert doc["proposals"][1]["glossary_term"] == "roas"
+        assert doc["proposals"][1]["table"] == "transactions"
+        assert doc["proposals"][1]["column"] == "amount_usd"
+
+    def test_export_empty_proposals(self, tmp_path):
+        mgr = self._make_manager()
+        output_file = str(tmp_path / "empty.yaml")
+        mgr.export_proposals_yaml(
+            fuzzy_proposals=[],
+            output_path=output_file,
+            catalog_name="c",
+            namespace=None,
+            glossary_id="g",
+        )
+        doc = RelatedEntriesManager.load_proposals_yaml(output_file)
+        assert doc["proposals"] == []
+
+    def test_load_file_not_found(self):
+        with pytest.raises(FileNotFoundError):
+            RelatedEntriesManager.load_proposals_yaml("/nonexistent/proposals.yaml")
+
+    def test_load_missing_scan_section(self, tmp_path):
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("proposals: []\n")
+        with pytest.raises(ValueError, match="Missing required 'scan'"):
+            RelatedEntriesManager.load_proposals_yaml(str(bad))
+
+    def test_load_missing_proposals_list(self, tmp_path):
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("scan:\n  catalog: c\n")
+        with pytest.raises(ValueError, match="Missing or invalid 'proposals'"):
+            RelatedEntriesManager.load_proposals_yaml(str(bad))
+
+    def test_load_missing_required_field(self, tmp_path):
+        bad = tmp_path / "bad.yaml"
+        bad.write_text(
+            "scan:\n  catalog: c\nproposals:\n"
+            "  - glossary_term: t\n    table: tbl\n    column: ''\n"
+        )
+        with pytest.raises(ValueError, match="missing required field 'column'"):
+            RelatedEntriesManager.load_proposals_yaml(str(bad))
+
+    def test_load_not_a_mapping(self, tmp_path):
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("- item1\n- item2\n")
+        with pytest.raises(ValueError, match="Expected a YAML mapping"):
+            RelatedEntriesManager.load_proposals_yaml(str(bad))
+
+
+# ---------------------------------------------------------------------------
+# _build_biglake_entry_name / _build_glossary_term_entry_name
+# ---------------------------------------------------------------------------
+
+class TestBuildEntryNames:
+    def test_biglake_entry_name(self):
+        result = RelatedEntriesManager._build_biglake_entry_name(
+            project="my-project",
+            location="us-east1",
+            catalog_name="my-catalog",
+            namespace="marketing",
+            table="pixel_events",
+        )
+        assert result == (
+            "projects/my-project/locations/us-east1"
+            "/entryGroups/@biglake/entries/"
+            "biglake.googleapis.com/projects/my-project"
+            "/catalogs/my-catalog/namespaces/marketing/tables/pixel_events"
+        )
+
+    def test_glossary_term_entry_name(self):
+        result = RelatedEntriesManager._build_glossary_term_entry_name(
+            project="my-project",
+            location="us-east1",
+            glossary_id="marketing-glossary",
+            term_name="impression",
+        )
+        assert result == (
+            "projects/my-project/locations/us-east1"
+            "/entryGroups/@glossary/entries/"
+            "glossary.googleapis.com/projects/my-project"
+            "/locations/us-east1/glossaries/marketing-glossary/terms/impression"
+        )
+
+    def test_glossary_term_entry_name_with_underscores(self):
+        result = RelatedEntriesManager._build_glossary_term_entry_name(
+            project="p",
+            location="us-east1",
+            glossary_id="g",
+            term_name="country_code",
+        )
+        # underscores become hyphens in the slug
+        assert "/terms/country-code" in result
+
+
+# ---------------------------------------------------------------------------
+# apply_proposals (dry-run)
+# ---------------------------------------------------------------------------
+
+class TestApplyProposalsDryRun:
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="test-project",
+            catalog_project_id="test-project",
+            location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def _write_proposals(self, tmp_path) -> str:
+        import yaml
+        doc = {
+            "scan": {
+                "catalog": "my-catalog",
+                "namespace": "marketing",
+                "glossary": "marketing-glossary",
+                "glossary_location": "us-east1",
+                "glossary_project": "test-project",
+                "scanned_at": "2026-05-23T14:00:00Z",
+            },
+            "proposals": [
+                {
+                    "glossary_term": "impression",
+                    "category": "Metrics",
+                    "description": "Ad impression",
+                    "table": "pixel_events",
+                    "column": "event_type",
+                    "match_score": 45,
+                    "match_rationale": "exact:event_type",
+                },
+                {
+                    "glossary_term": "roas",
+                    "category": "Metrics",
+                    "description": "Return On Ad Spend",
+                    "table": "transactions",
+                    "column": "amount_usd",
+                    "match_score": 30,
+                    "match_rationale": "substr:amount",
+                },
+            ],
+        }
+        path = str(tmp_path / "proposals.yaml")
+        with open(path, "w") as fh:
+            yaml.dump(doc, fh, sort_keys=False)
+        return path
+
+    def test_dry_run_no_gcloud_calls(self, tmp_path):
+        """Dry-run should not invoke any gcloud commands."""
+        mgr = self._make_manager()
+        proposals_path = self._write_proposals(tmp_path)
+
+        # Patch _run_gcloud to ensure it is NOT called
+        from unittest.mock import patch, MagicMock
+        with patch.object(mgr, "_run_gcloud") as mock_gcloud:
+            results = mgr.apply_proposals(proposals_path, dry_run=True)
+
+        mock_gcloud.assert_not_called()
+        assert len(results) == 2
+        assert all(r.status == "dry-run" for r in results)
+        assert results[0].glossary_term == "impression"
+        assert results[0].table_column == "pixel_events.event_type"
+        assert results[1].glossary_term == "roas"
+
+    def test_apply_with_overrides(self, tmp_path):
+        """Overrides for glossary/project/location are passed through."""
+        mgr = self._make_manager()
+        proposals_path = self._write_proposals(tmp_path)
+
+        from unittest.mock import patch
+        with patch.object(mgr, "_run_gcloud"):
+            results = mgr.apply_proposals(
+                proposals_path,
+                dry_run=True,
+                glossary_override="other-glossary",
+                project_override="other-project",
+                location_override="eu-west1",
+            )
+
+        # Check that overrides appear in the detail string
+        assert "other-project" in results[0].detail
+        assert "other-glossary" in results[0].detail
+        assert "eu-west1" in results[0].detail
+
+
+# ---------------------------------------------------------------------------
+# ApplyResult dataclass
+# ---------------------------------------------------------------------------
+
+class TestApplyResult:
+    def test_default_detail(self):
+        r = ApplyResult(glossary_term="t", table_column="t.c", status="created")
+        assert r.detail == ""
+
+    def test_with_detail(self):
+        r = ApplyResult(glossary_term="t", table_column="t.c", status="error", detail="oops")
+        assert r.detail == "oops"

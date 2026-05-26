@@ -284,6 +284,8 @@ This command scans all table columns in the specified BigLake catalog and matche
 - **Phase A — Exact & Synonym Matches**: terms that have a direct column name match or match via a synonym relationship defined in the glossary.
 - **Phase B — Fuzzy Semantic Proposals**: for terms with no exact match, a keyword-based scoring system proposes candidate columns based on the term's description. Columns are scored by exact keyword match (+10), substring match (+5), and table-name match (+3).
 
+When `--output` is provided, Phase B proposals are written to a YAML file that can be curated (rows removed or commented out) and then applied with `apply-related-entries`.
+
 ```bash
 # Scan catalog against default glossary
 uv run python -m ingestion.cli scan-for-related-entries \
@@ -298,12 +300,19 @@ uv run python -m ingestion.cli scan-for-related-entries \
 uv run python -m ingestion.cli scan-for-related-entries \
   --catalog wpp-dataproducts-lakehouse-warehouse \
   --glossary marketing-business-glossary
+
+# Export proposals to YAML for curation
+uv run python -m ingestion.cli scan-for-related-entries \
+  --catalog wpp-dataproducts-lakehouse-warehouse \
+  --namespace marketing \
+  --output proposals.yaml
 ```
 
 Options:
 - `--catalog` (required): BigLake catalog name to scan
 - `--namespace`: optional namespace filter within the catalog
 - `--glossary`: glossary ID or display name (default: first glossary found)
+- `--output` / `-o`: write Phase B proposals to a YAML file for curation and later apply
 
 #### Workflow for `scan-for-related-entries`
 
@@ -317,6 +326,43 @@ Below is a step-by-step description of what happens when you run the command:
    - Synonym matching checks whether a term's description starts with "Synonym for <canonical-term>" and inherits the canonical term's match if one exists.
 5. **Phase B — Fuzzy semantic matching** — Terms not matched in Phase A are processed by tokenizing their description into keywords (filtering stop words). Each column/table is scored against those keywords. Proposals are sorted by score (highest first) so the most likely matches appear at the top.
 6. **Report output** — A summary is printed showing glossary and catalog statistics, the Phase A matches table, and the Phase B proposals table with scores and match rationale.
+
+### `apply-related-entries`
+Applies curated related-entry proposals from a YAML file to Dataplex Catalog.
+
+This command reads a proposals file (produced by `scan-for-related-entries --output`), validates each proposal, and creates related-entry links in Dataplex Catalog. The command is idempotent: existing relations are skipped with an informational message rather than duplicated.
+
+#### Workflow
+
+1. **Scan** — `scan-for-related-entries --output proposals.yaml` exports proposals.
+2. **Curate** — A data steward edits `proposals.yaml`, removing incorrect rows.
+3. **Preview** — `apply-related-entries --input proposals.yaml --dry-run` validates and previews.
+4. **Apply** — `apply-related-entries --input proposals.yaml` creates the related-entry links.
+
+```bash
+# Preview changes
+uv run python -m ingestion.cli apply-related-entries \
+  --input proposals.yaml --dry-run
+
+# Execute
+uv run python -m ingestion.cli apply-related-entries \
+  --input proposals.yaml
+
+# Override glossary
+uv run python -m ingestion.cli apply-related-entries \
+  --input proposals.yaml --glossary my-glossary
+
+# Override project and location
+uv run python -m ingestion.cli apply-related-entries \
+  --input proposals.yaml --project my-project --location eu-west1
+```
+
+Options:
+- `--input` (required): path to curated proposals YAML file
+- `--dry-run`: validate and preview; do not mutate
+- `--glossary`: override glossary ID from the file
+- `--project`: override the Google Cloud project
+- `--location`: override the location (default: from file or `us-east1`)
 
 ### `reset`
 Deletes generated metadata resources for a clean re-run.
@@ -337,4 +383,4 @@ Behavior:
 - Metadata parsing: `ingestion/table_metadata.py`
 - Glossary manager: `ingestion/glossary_manager.py`
 - Data quality manager: `ingestion/data_quality.py`
-- Related entries manager: `ingestion/related_entries.py`
+- Related entries manager: `ingestion/related_entries.py` (includes proposals export/import and apply logic)
