@@ -129,10 +129,10 @@ class DataQualityManager:
         try:
             bq.get_dataset(dataset_id)
         except Exception:
-            bq.create_dataset(
-                bigquery.Dataset(f"{self.config.project_id}.{dataset_id}")
-            )
-            print(f"  ✅ Created BigQuery dataset: {dataset_id}")
+            dataset = bigquery.Dataset(f"{self.config.project_id}.{dataset_id}")
+            dataset.location = self.config.location
+            bq.create_dataset(dataset)
+            print(f"  ✅ Created BigQuery dataset: {dataset_id} in {self.config.location}")
 
     def _get_scan_id(self, table: str) -> str:
         """Generate deterministic scan ID for a table (no timestamp)."""
