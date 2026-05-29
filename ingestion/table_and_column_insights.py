@@ -104,13 +104,46 @@ class HybridMetadataEnricher:
             print("Metadata enrichment complete!")
 
     def generate_descriptions(self, timeout: int = 300, dry_run: bool = False):
-        """Generate hybrid descriptions for all tables in the dataset."""
+        """Generate manual descriptions for all tables in the dataset."""
+        import glob
+        import yaml
+
         tables = [table.table_id for table in self.client.list_tables(self.dataset_id)]
-        self._generate_descriptions_core(tables, dry_run=dry_run)
+
+        # Scan metadata directory to map table_id to yaml files
+        yaml_mapping = {}
+        for yaml_file in glob.glob(os.path.join(self.metadata_dir, "*.yaml")):
+            try:
+                with open(yaml_file, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                    if data and isinstance(data, dict) and "table_id" in data:
+                        yaml_mapping[data["table_id"]] = yaml_file
+            except Exception:
+                pass
+
+        metadata_files = [yaml_mapping.get(table_id) for table_id in tables]
+
+        self._generate_descriptions_core(tables, metadata_files=metadata_files, use_google_insights=False, dry_run=dry_run)
 
     def generate_descriptions_for_tables(self, table_names: List[str], timeout: int = 300, dry_run: bool = False):
-        """Generate hybrid descriptions for specific tables using default markdown files."""
-        self._generate_descriptions_core(table_names, dry_run=dry_run)
+        """Generate manual descriptions for specific tables using default markdown files."""
+        import glob
+        import yaml
+
+        # Scan metadata directory to map table_id to yaml files
+        yaml_mapping = {}
+        for yaml_file in glob.glob(os.path.join(self.metadata_dir, "*.yaml")):
+            try:
+                with open(yaml_file, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                    if data and isinstance(data, dict) and "table_id" in data:
+                        yaml_mapping[data["table_id"]] = yaml_file
+            except Exception:
+                pass
+
+        metadata_files = [yaml_mapping.get(table_name) for table_name in table_names]
+
+        self._generate_descriptions_core(table_names, metadata_files=metadata_files, use_google_insights=False, dry_run=dry_run)
 
     def generate_descriptions_for_tables_with_google_insights(self, table_names: List[str], timeout: int = 300, dry_run: bool = False):
         """Generate descriptions using ONLY Google-style automated insights (no manual files)."""
