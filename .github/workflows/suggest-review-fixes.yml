@@ -81,23 +81,27 @@ jobs:
             - ONLY create the responses.json file
 
             FOR EACH COMMENT:
-            1. Read the comment body and diff_hunk
-            2. Decide if it's a simple fix. Simple fixes include:
+            1. Read the comment body and diff_hunk.
+            2. If diff_hunk is NOT null, this is an inline comment. Decide if it's a simple fix:
+               Simple fixes:
                - Typo corrections
                - Variable/function renames
                - Adding/removing a single line
                - Simple style changes (formatting, spacing)
                - Reverting a small change (when diff_hunk shows the original)
 
-            3. NOT simple (skip these):
-               - Involves updating lines beyond this diff hunk to appropriately address (e.g. "use consts instead of magic numbers in this PR")
+               NOT simple (skip these):
+               - Involves updating lines beyond this diff hunk
                - Needs architectural decisions
                - Involves multiple files
                - Comment is a question or discussion (not a change request)
                - Comment is praise or approval (e.g., "LGTM", "nice!")
-               - The diff_hunk field is null (this is a review body, not an inline comment)
 
-            HOW SUGGESTIONS WORK:
+            3. If diff_hunk IS null, this is a review body (general request, not line-specific).
+               Treat it as a task request: analyze the codebase, investigate the issue raised,
+               and provide your findings and recommendations as a text response.
+
+            HOW SUGGESTIONS WORK (for inline comments with diff_hunk):
             The suggestion block will COMPLETELY REPLACE the lines shown in the diff_hunk.
             - Your suggestion ENTIRELY OVERWRITES the diff_hunk content
             - Include ALL lines you want to keep from the diff_hunk, with your changes applied
@@ -107,22 +111,26 @@ jobs:
             - Do not change formatting, line breaks, or whitespace unless that's the requested fix
 
             OUTPUT FORMAT:
-            Create responses.json as a valid JSON object. Each key is a comment ID, each value is a string containing:
+            Create responses.json as a valid JSON object. Each key is a comment ID.
+
+            For inline comments (diff_hunk not null), each value is a string containing:
             - A brief explanation (1 sentence max)
             - A newline
-            - A suggestion block
-
-            The suggestion block format:
+            - A suggestion block:
             \`\`\`suggestion
             <complete replacement for the diff_hunk lines>
             \`\`\`
 
-            VALID JSON EXAMPLE:
+            For review body comments (diff_hunk is null), each value is a string containing:
+            - A markdown summary of your analysis and findings (no suggestion block)
+
+            VALID JSON EXAMPLES:
             {
-              "12345678": "Fixed the typo.\\n\`\`\`suggestion\\nprintln!(\\"Hello, world!\\\");\\n\`\`\`"
+              "12345678": "Fixed the typo.\\n\`\`\`suggestion\\nprintln!(\\"Hello, world!\\\");\\n\`\`\`",
+              "4395381115": "I analyzed the codebase. The issue is that..."
             }
 
-            If no comments are simple enough, output: {}
+            If no comments are actionable, output: {}
             `;
             core.setOutput('prompt', prompt);
 
@@ -162,25 +170,55 @@ jobs:
               return;
             }
 
+            // Load the original comments to know which are inline vs. review body
+            let comments = [];
+            if (fs.existsSync('review_comments.json')) {
+              try {
+                comments = JSON.parse(fs.readFileSync('review_comments.json', 'utf8'));
+              } catch (e) {
+                core.warning(`Could not read review_comments.json: ${e.message}`);
+              }
+            }
+            const commentMap = new Map(comments.map(c => [String(c.id), c]));
+
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
 
             for (const [commentId, reply] of Object.entries(responses)) {
-              if (typeof reply !== 'string') {
-                core.info(`Skipping comment ${commentId}: reply is not a string. Value: ${JSON.stringify(response)}`);
+              if (typeof reply !== 'string' || !reply.trim()) {
+                core.info(`Skipping comment ${commentId}: empty or not a string.`);
                 continue;
               }
-              if (!reply || !reply.includes('```suggestion')) continue;
-            
-              core.info(`Replying to comment ${commentId}`);
-              try {
-                await github.rest.pulls.createReplyForReviewComment({
-                  owner, repo,
-                  pull_number: prNumber,
-                  comment_id: Number(commentId),
-                  body: reply
-                });
-              } catch (error) {
-                core.error(`Failed to reply to comment ${commentId}:`, error);
+
+              const comment = commentMap.get(commentId);
+              const isSynthetic = comment && comment.diff_hunk === null;
+
+              if (isSynthetic) {
+                // Review body comment — post as a regular PR comment
+                core.info(`Posting PR comment for review body (id=${commentId})`);
+                try {
+                  await github.rest.issues.createComment({
+                    owner, repo,
+                    issue_number: prNumber,
+                    body: reply
+                  });
+                } catch (error) {
+                  core.error(`Failed to post PR comment for ${commentId}: ${error.message}`);
+                }
+              } else if (reply.includes('```suggestion')) {
+                // Inline comment with a suggestion block
+                core.info(`Replying to inline comment ${commentId}`);
+                try {
+                  await github.rest.pulls.createReplyForReviewComment({
+                    owner, repo,
+                    pull_number: prNumber,
+                    comment_id: Number(commentId),
+                    body: reply
+                  });
+                } catch (error) {
+                  core.error(`Failed to reply to inline comment ${commentId}: ${error.message}`);
+                }
+              } else {
+                core.info(`Skipping inline comment ${commentId}: no suggestion block.`);
               }
             }
