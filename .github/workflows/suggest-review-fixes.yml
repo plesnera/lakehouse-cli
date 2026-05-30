@@ -73,14 +73,32 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const prompt = `You have review comments in review_comments.json. Your task is to generate responses.json containing code suggestions.
+            const fs = require('fs');
+
+            // Read review_comments.json and embed its contents directly into the prompt
+            // so the Oz Agent doesn't need to locate the file on disk (its working
+            // directory may differ from the checkout directory).
+            let commentsJson = '[]';
+            if (fs.existsSync('review_comments.json')) {
+              commentsJson = fs.readFileSync('review_comments.json', 'utf8');
+              core.info(`Read review_comments.json (${commentsJson.length} bytes).`);
+            } else {
+              core.warning('review_comments.json not found — agent will see empty input.');
+            }
+
+            const prompt = `You are a code review assistant. Your task is to generate responses.json containing code suggestions or analysis.
+
+            REVIEW COMMENTS (JSON):
+            \`\`\`json
+            ${commentsJson}
+            \`\`\`
 
             IMPORTANT CONSTRAINTS:
             - Do NOT run any git commands (no commits, branches, or pushes)
             - Do NOT modify any source files directly
             - ONLY create the responses.json file
 
-            FOR EACH COMMENT:
+            FOR EACH COMMENT in the JSON above:
             1. Read the comment body and diff_hunk.
             2. If diff_hunk is NOT null, this is an inline comment. Decide if it's a simple fix:
                Simple fixes:
