@@ -39,7 +39,7 @@ class Config(BaseModel):
         default_factory=lambda: f"gs://{Config.get_current_gcloud_project()}-warehouse/iceberg",
         description="GCS path for Iceberg data (can be different project)"
     )
-    iceberg_namespace: str = "my-iceberg-namespace"
+    iceberg_namespace: str = "marketing"
 
     # Connection configuration - template with project placeholder
     biglake_connection: str = Field(
