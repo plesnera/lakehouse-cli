@@ -22,6 +22,8 @@ on:
 jobs:
   suggest_review_fixes:
     runs-on: ubuntu-latest
+    if: contains(github.event.review.body, '@oz-agent') &&
+        github.actor != 'github-actions[bot]'
     permissions:
       contents: read
       pull-requests: write
@@ -38,6 +40,7 @@ jobs:
             const { owner, repo } = context.repo;
             const reviewId = context.payload.review.id;
             const prNumber = context.payload.pull_request.number;
+            const reviewBody = context.payload.review.body;
 
             core.info(`Fetching comments for review ${reviewId} on PR #${prNumber}`);
 
@@ -46,6 +49,21 @@ jobs:
               pull_number: prNumber,
               review_id: reviewId
             });
+
+            // listCommentsForReview only returns inline comments (on specific diff lines).
+            // If the review has a body but no inline comments, include the body so the
+            // Oz Agent has something to respond to.
+            if (comments.length === 0 && reviewBody && reviewBody.trim()) {
+              core.info('No inline comments found; using review body as a synthetic comment.');
+              comments.push({
+                id: String(reviewId),
+                path: null,
+                line: null,
+                start_line: null,
+                body: reviewBody,
+                diff_hunk: null
+              });
+            }
 
             core.info(`Found ${comments.length} comments.`);
             fs.writeFileSync( 'review_comments.json', JSON.stringify(comments, ['id', 'path', 'line', 'start_line', 'body', 'diff_hunk'], 2));
@@ -77,6 +95,7 @@ jobs:
                - Involves multiple files
                - Comment is a question or discussion (not a change request)
                - Comment is praise or approval (e.g., "LGTM", "nice!")
+               - The diff_hunk field is null (this is a review body, not an inline comment)
 
             HOW SUGGESTIONS WORK:
             The suggestion block will COMPLETELY REPLACE the lines shown in the diff_hunk.

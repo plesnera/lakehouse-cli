@@ -24,8 +24,10 @@ on:
 
 jobs:
   auto_fix:
-    # Only run if the label added is 'oz-agent'
-    if: github.event.label.name == 'oz-agent'
+    # Only run if the label added is 'oz-agent' or the body is tagged with '@oz-agent'
+    if: (github.event.label.name == 'oz-agent' || 
+        contains(github.event.issue.body, '@oz-agent')) &&
+        github.actor != 'github-actions[bot]'
     name: Auto Fix Issue
     runs-on: ubuntu-latest
     permissions:
