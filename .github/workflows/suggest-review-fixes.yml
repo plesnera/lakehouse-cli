@@ -1,8 +1,10 @@
 # ======================================================================================
 # Workflow: Suggest Review Fixes
 # ======================================================================================
+# v2 — Handles both inline review comments and review body (general requests).
+#
 # Usage:
-#   - Triggers when a Pull Request Review is submitted.
+#   - Triggers when a Pull Request Review is submitted with @oz-agent in the body.
 #   - Reads the review comments and uses the Oz Agent to suggest fixes.
 #
 # Setup:
@@ -32,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch review comments
+      - name: Collect review data
         uses: actions/github-script@v7
         with:
           script: |
@@ -42,20 +44,13 @@ jobs:
             const prNumber = context.payload.pull_request.number;
             const reviewBody = context.payload.review.body;
 
-            core.info(`Fetching comments for review ${reviewId} on PR #${prNumber}`);
+            core.info(`Collecting data for review ${reviewId} on PR #${prNumber}`);
 
-            const { data: comments } = await github.rest.pulls.listCommentsForReview({
-              owner, repo,
-              pull_number: prNumber,
-              review_id: reviewId
-            });
-
-            // listCommentsForReview only returns inline comments (on specific diff lines).
-            // If the review has a body but no inline comments, include the body so the
-            // Oz Agent has something to respond to.
-            if (comments.length === 0 && reviewBody && reviewBody.trim()) {
-              core.info('No inline comments found; using review body as a synthetic comment.');
-              comments.push({
+            // Start with the review body from the event payload.
+            // This is ALWAYS present (the workflow only triggers when body contains @oz-agent).
+            const entries = [];
+            if (reviewBody && reviewBody.trim()) {
+              entries.push({
                 id: String(reviewId),
                 path: null,
                 line: null,
@@ -63,10 +58,25 @@ jobs:
                 body: reviewBody,
                 diff_hunk: null
               });
+              core.info('Added review body as primary entry.');
             }
 
-            core.info(`Found ${comments.length} comments.`);
-            fs.writeFileSync( 'review_comments.json', JSON.stringify(comments, ['id', 'path', 'line', 'start_line', 'body', 'diff_hunk'], 2));
+            // Supplement with any inline comments (comments on specific diff lines).
+            // listCommentsForReview only returns inline comments — it does NOT include
+            // the review body, so we use the event payload for that (above).
+            const { data: inlineComments } = await github.rest.pulls.listCommentsForReview({
+              owner, repo,
+              pull_number: prNumber,
+              review_id: reviewId
+            });
+            core.info(`Found ${inlineComments.length} inline comments.`);
+            entries.push(...inlineComments);
+
+            core.info(`Total entries: ${entries.length}.`);
+            fs.writeFileSync(
+              'review_comments.json',
+              JSON.stringify(entries, ['id', 'path', 'line', 'start_line', 'body', 'diff_hunk'], 2)
+            );
 
       - name: Construct Prompt
         id: prompt
