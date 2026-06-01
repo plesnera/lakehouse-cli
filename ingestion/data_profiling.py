@@ -116,6 +116,7 @@ class DataProfilingManager:
             data=dataplex_v1.DataSource(resource=bq_resource),
             data_profile_spec=dataplex_v1.DataProfileSpec(
                 post_scan_actions=post_scan_actions,
+                catalog_publishing_enabled=True,
             ),
             execution_spec=dataplex_v1.DataScan.ExecutionSpec(
                 trigger=dataplex_v1.Trigger(

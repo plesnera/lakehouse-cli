@@ -264,6 +264,7 @@ class DataQualityManager:
             data_quality_spec=dataplex_v1.DataQualitySpec(
                 rules=rules,
                 post_scan_actions=post_scan_actions,
+                catalog_publishing_enabled=True,
             ),
             execution_spec=dataplex_v1.DataScan.ExecutionSpec(
                 trigger=dataplex_v1.Trigger(
