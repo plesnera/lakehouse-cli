@@ -58,7 +58,7 @@ class BQMLGeminiManager:
         return f"""
 CREATE OR REPLACE MODEL `{self.dataset}.gemini_model`
   REMOTE WITH CONNECTION `{self.connection}`
-  OPTIONS (ENDPOINT = 'gemini-2.0-flash');
+  OPTIONS (ENDPOINT = 'gemini-2.5-flash');
 """.strip()
 
     def _sql_summarise_campaigns(self) -> str:
@@ -81,7 +81,7 @@ FROM AI.GENERATE_TEXT(
     WHERE status = 'completed'
     LIMIT 3
   ),
-  STRUCT(256 AS max_output_tokens, 0.2 AS temperature, TRUE AS flatten_json_output)
+  STRUCT(256 AS max_output_tokens, 0.2 AS temperature)
 );
 """.strip()
 
@@ -102,7 +102,7 @@ FROM AI.GENERATE_TEXT(
     FROM `{self.dataset}.creatives`
     LIMIT 5
   ),
-  STRUCT(32 AS max_output_tokens, 0.0 AS temperature, TRUE AS flatten_json_output)
+  STRUCT(32 AS max_output_tokens, 0.0 AS temperature)
 );
 """.strip()
 
@@ -122,6 +122,6 @@ FROM AI.GENERATE_TEXT(
     FROM `{self.dataset}.audience`
     LIMIT 3
   ),
-  STRUCT(512 AS max_output_tokens, 0.4 AS temperature, TRUE AS flatten_json_output)
+  STRUCT(512 AS max_output_tokens, 0.4 AS temperature)
 );
 """.strip()
