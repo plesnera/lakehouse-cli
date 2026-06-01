@@ -471,8 +471,28 @@ class BusinessGlossaryManager:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
 
+    def _build_dataplex_bq_entry_name(self, table: str) -> str:
+        """Build the native ``@dataplex`` entry name for a BigQuery table.
+
+        Dataplex auto-generates entries for BigQuery tables under the
+        ``@dataplex`` entry group.  The entry ID mirrors the BigQuery
+        resource path::
+
+            projects/{project}/locations/{location}/entryGroups/@dataplex/entries/
+            bigquery.googleapis.com/projects/{project}/datasets/{dataset}/tables/{table}
+        """
+        return (
+            f"{self.config.catalog_resource_parent}/entryGroups/@dataplex/entries/"
+            f"bigquery.googleapis.com/projects/{self.config.project_id}/"
+            f"datasets/{self.config.iceberg_namespace}/tables/{table}"
+        )
+
     def apply_glossary_to_assets(self, input_path: Optional[str] = None) -> None:
-        """Apply glossary-term-association aspects to marketing-lakehouse entries.
+        """Apply glossary-term-association aspects to native ``@dataplex`` BigQuery entries.
+
+        Attaches a custom ``glossary-term-association`` aspect directly to the
+        auto-generated ``@dataplex`` entry for each BigQuery table so that
+        glossary terms surface in the Dataplex Knowledge Catalog UI.
 
         Uses aspects instead of EntryLinks because Dataplex v2 ``definition``
         links only work between glossary-term entries, not glossary-term → table.
@@ -495,7 +515,9 @@ class BusinessGlossaryManager:
                     table_terms.setdefault(table, []).append(term_def)
 
         for table, terms in table_terms.items():
-            entry_path = f"{self.config.entry_group_path}/entries/{table}"
+            # Target the native @dataplex entry for the BigQuery table so
+            # that glossary terms are visible in the Dataplex UI.
+            entry_path = self._build_dataplex_bq_entry_name(table)
 
             term_names = [t.display_name for t in terms]
             term_entry_paths = [
