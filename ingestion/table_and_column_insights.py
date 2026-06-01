@@ -453,13 +453,51 @@ class HybridMetadataEnricher:
         except Exception as e:
             print(f"  ❌ Failed to update metadata for {table_ref}: {e}")
 
-    def create_template_metadata(self, table_id: str):
+    def _build_table_id_mapping(self) -> Dict[str, str]:
+        """
+        Scan all YAML files in the metadata directory and build a mapping
+        of table_id to the file path that already tracks it.
+
+        Returns:
+            Dict mapping table_id -> existing file path
+        """
+        import yaml
+
+        mapping: Dict[str, str] = {}
+        if not os.path.isdir(self.metadata_dir):
+            return mapping
+
+        for filename in os.listdir(self.metadata_dir):
+            if not filename.endswith(('.yaml', '.yml')):
+                continue
+            filepath = os.path.join(self.metadata_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                if isinstance(data, dict) and data.get('table_id'):
+                    mapping[data['table_id']] = filepath
+            except Exception:
+                # Skip files that can't be parsed
+                continue
+        return mapping
+
+    def create_template_metadata(self, table_id: str, existing_table_ids: Optional[Dict[str, str]] = None):
         """
         Create a template YAML metadata file for manual descriptions.
 
         Args:
             table_id: Table name
+            existing_table_ids: Optional pre-built mapping of table_id -> file path.
+                                If None, a fresh mapping is built by scanning the metadata dir.
         """
+        if existing_table_ids is None:
+            existing_table_ids = self._build_table_id_mapping()
+
+        # Check if this table_id is already tracked by an existing YAML file
+        if table_id in existing_table_ids:
+            print(f"⚠️  Metadata file already exists for table '{table_id}': {existing_table_ids[table_id]}")
+            return
+
         metadata_file = os.path.join(self.metadata_dir, f"{table_id}.yaml")
 
         if os.path.exists(metadata_file):
@@ -503,13 +541,20 @@ class HybridMetadataEnricher:
     def create_all_templates(self):
         """
         Create template YAML metadata files for all tables.
+
+        Scans existing YAML files in the metadata directory first to build a
+        mapping of table_id -> file path, so tables already tracked under a
+        differently-named file (e.g. audience_profile.yaml for table_id 'audience')
+        are not duplicated.
         """
         print("Creating metadata templates for all tables...")
+
+        existing_table_ids = self._build_table_id_mapping()
 
         tables = self.client.list_tables(self.dataset_id)
 
         for table in tables:
-            self.create_template_metadata(table.table_id)
+            self.create_template_metadata(table.table_id, existing_table_ids=existing_table_ids)
 
         print("Template creation complete!")
 
