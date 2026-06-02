@@ -258,15 +258,16 @@ class DatasetInsightsManager:
                         return {"status": "error", "message": err}
 
                     result_data = result_response.json()
-                    dataset_result = result_data.get('datasetResult', {})
+                    data_doc_result = result_data.get('dataDocumentationResult', {})
+                    dataset_result = data_doc_result.get('datasetResult', {})
 
                     print(f"✅ Dataset insights completed successfully")
 
                     return {
                         "status": "success",
-                        "description": dataset_result.get('description', ''),
-                        "relationship_graph": dataset_result.get('relationshipGraph', {}),
-                        "sample_queries": dataset_result.get('sampleQueries', []),
+                        "description": dataset_result.get('overview', ''),
+                        "relationship_graph": dataset_result.get('schemaRelationships', []),
+                        "sample_queries": dataset_result.get('queries', []),
                         "primary_keys": dataset_result.get('discoveredPrimaryKeys', []),
                         "foreign_keys": dataset_result.get('discoveredForeignKeys', [])
                     }
