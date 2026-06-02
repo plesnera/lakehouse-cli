@@ -60,7 +60,6 @@ class DatasetInsightsManager:
 
             # Fixed scan ID for dataset-level insights (reusable, not timestamped)
             scan_id = f"dataset-insights-{dataset_name}"
-            ttl_seconds = 3600
 
             payload = {
                 "data": {
@@ -68,14 +67,11 @@ class DatasetInsightsManager:
                 },
                 "type": "DATA_DOCUMENTATION",
                 "dataDocumentationSpec": {
-                    "generationScopes": "ALL",
                     "catalogPublishingEnabled": True
                 },
                 "executionSpec": {
                     "trigger": {
-                        "one_time": {
-                            "ttl_after_scan_completion": {"seconds": ttl_seconds}
-                        }
+                        "onDemand": {}
                     }
                 }
             }
@@ -105,17 +101,37 @@ class DatasetInsightsManager:
             print(f"📡 Creating dataset-level DataScan: {scan_id}")
             response = requests.post(url, headers=headers, json=payload)
 
+            if response.status_code == 409:
+                print(f"ℹ️  DataScan already exists: {scan_id} (reusing)")
+                return scan_id
+
             if response.status_code != 200:
                 err = response.json().get('error', {}).get('message', response.text)
                 print(f"❌ DataScan creation failed ({response.status_code}): {err}")
                 return None
 
-            scan_data = response.json()
-            datascan_name = scan_data.get(
-                'name',
-                f"projects/{project_id}/locations/{location}/dataScans/{scan_id}"
-            )
-            print(f"✅ Dataset-level DataScan created (runs asynchronously): {datascan_name}")
+            # Poll the long-running operation until it completes
+            operation = response.json()
+            op_name = operation.get('name', '')
+            if op_name and not operation.get('done', False):
+                print(f"⏳ Waiting for DataScan creation operation to complete...")
+                op_url = f"https://dataplex.googleapis.com/v1/{op_name}"
+                for _ in range(60):  # up to ~5 minutes
+                    time.sleep(5)
+                    op_resp = requests.get(op_url, headers=headers)
+                    if op_resp.status_code == 200:
+                        op_data = op_resp.json()
+                        if op_data.get('done', False):
+                            if 'error' in op_data:
+                                err = op_data['error'].get('message', 'Unknown error')
+                                print(f"❌ DataScan creation operation failed: {err}")
+                                return None
+                            break
+                    else:
+                        break
+
+            datascan_name = f"projects/{project_id}/locations/{location}/dataScans/{scan_id}"
+            print(f"✅ Dataset-level DataScan created: {datascan_name}")
             return scan_id
 
         except Exception as e:
@@ -207,26 +223,32 @@ class DatasetInsightsManager:
             print(f"📊 Waiting for dataset insights results (timeout: {timeout}s)...")
 
             while time.time() - start_time < timeout:
-                url = (
+                # Fetch the latest job from the /jobs endpoint
+                jobs_url = (
                     f"https://dataplex.googleapis.com/v1/projects/{project_id}"
-                    f"/locations/{location}/dataScans/{scan_id}"
+                    f"/locations/{location}/dataScans/{scan_id}/jobs"
                 )
-                response = requests.get(url, headers=headers)
+                response = requests.get(jobs_url, headers=headers)
 
                 if response.status_code != 200:
                     err = response.json().get('error', {}).get('message', response.text)
-                    print(f"❌ Failed to get scan status ({response.status_code}): {err}")
+                    print(f"❌ Failed to get scan jobs ({response.status_code}): {err}")
                     return {"status": "error", "message": err}
 
-                scan_data = response.json()
-                state = scan_data.get('state', 'UNKNOWN')
+                jobs = response.json().get('dataScans', response.json().get('dataScanJobs', []))
+                if not jobs:
+                    elapsed = int(time.time() - start_time)
+                    print(f"   No jobs found yet ({elapsed}s elapsed, {timeout - elapsed}s remaining)")
+                    time.sleep(poll_interval)
+                    continue
 
-                if state == 'DONE':
-                    # Get results
-                    result_url = (
-                        f"https://dataplex.googleapis.com/v1/projects/{project_id}"
-                        f"/locations/{location}/dataScans/{scan_id}/readData"
-                    )
+                latest_job = jobs[0]
+                state = latest_job.get('state', 'UNKNOWN')
+
+                if state in ('SUCCEEDED', 'DONE'):
+                    # Fetch full results using ?view=FULL on the job URL
+                    job_name = latest_job.get('name', '')
+                    result_url = f"https://dataplex.googleapis.com/v1/{job_name}?view=FULL"
                     result_response = requests.get(result_url, headers=headers)
 
                     if result_response.status_code != 200:
@@ -235,17 +257,17 @@ class DatasetInsightsManager:
                         return {"status": "error", "message": err}
 
                     result_data = result_response.json()
-                    data_documentation_result = result_data.get('dataDocumentationResult', {})
+                    dataset_result = result_data.get('datasetResult', {})
 
                     print(f"✅ Dataset insights completed successfully")
 
                     return {
                         "status": "success",
-                        "description": data_documentation_result.get('description', ''),
-                        "relationship_graph": data_documentation_result.get('relationshipGraph', {}),
-                        "sample_queries": data_documentation_result.get('sampleQueries', []),
-                        "primary_keys": data_documentation_result.get('discoveredPrimaryKeys', []),
-                        "foreign_keys": data_documentation_result.get('discoveredForeignKeys', [])
+                        "description": dataset_result.get('description', ''),
+                        "relationship_graph": dataset_result.get('relationshipGraph', {}),
+                        "sample_queries": dataset_result.get('sampleQueries', []),
+                        "primary_keys": dataset_result.get('discoveredPrimaryKeys', []),
+                        "foreign_keys": dataset_result.get('discoveredForeignKeys', [])
                     }
 
                 elif state == 'FAILED':
