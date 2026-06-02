@@ -1,0 +1,10 @@
+table_id: audience
+display_name: Audience Profile
+description: >
+  Audience profile table with demographic and behavioral data.
+
+columns:
+  - name: user_id
+    description: Unique user identifier
+  - name: segment
+    description: Audience segment classification
