@@ -39,7 +39,7 @@ class DatasetInsightsManager:
         self.client = bigquery.Client(project=config.project_id)
         self.dataset_id = f"{config.project_id}.{config.iceberg_namespace}"
 
-    def create_scan(self, dry_run: bool = False) -> Optional[str]:
+    def create_scan(self, dry_run: bool = False, timeout: int = 600) -> Optional[str]:
         """
         Create a dataset-level DATA_DOCUMENTATION scan.
 
@@ -116,7 +116,8 @@ class DatasetInsightsManager:
             if op_name and not operation.get('done', False):
                 print(f"⏳ Waiting for DataScan creation operation to complete...")
                 op_url = f"https://dataplex.googleapis.com/v1/{op_name}"
-                for _ in range(60):  # up to ~5 minutes
+                start_op_time = time.time()
+                while time.time() - start_op_time < timeout:
                     time.sleep(5)
                     op_resp = requests.get(op_url, headers=headers)
                     if op_resp.status_code == 200:

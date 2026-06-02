@@ -26,7 +26,7 @@ class TestDatasetInsightsCommand:
         result = runner.invoke(app, ["dataset-insights"])
 
         assert result.exit_code == 0
-        instance.create_scan.assert_called_once_with(dry_run=False)
+        instance.create_scan.assert_called_once_with(dry_run=False, timeout=600)
         instance.run_scan.assert_called_once()
 
     @patch("ingestion.cli.DatasetInsightsManager")
@@ -38,7 +38,7 @@ class TestDatasetInsightsCommand:
         result = runner.invoke(app, ["dataset-insights", "--dry-run"])
 
         assert result.exit_code == 0
-        instance.create_scan.assert_called_once_with(dry_run=True)
+        instance.create_scan.assert_called_once_with(dry_run=True, timeout=600)
         instance.run_scan.assert_not_called()
 
     @patch("ingestion.cli.DatasetInsightsManager")
@@ -69,7 +69,7 @@ class TestDatasetInsightsCommand:
         result = runner.invoke(app, ["dataset-insights", "--run"])
 
         assert result.exit_code == 0
-        instance.create_scan.assert_called_once_with(dry_run=False)
+        instance.create_scan.assert_called_once_with(dry_run=False, timeout=600)
         instance.run_scan.assert_called_once()
 
     @patch("ingestion.cli.DatasetInsightsManager")
@@ -92,5 +92,19 @@ class TestDatasetInsightsCommand:
         result = runner.invoke(app, ["dataset-insights", "--run"])
 
         assert result.exit_code == 0
+        instance.create_scan.assert_called_once_with(dry_run=False, timeout=600)
         # Should not try to run if creation failed
         instance.run_scan.assert_not_called()
+
+    @patch("ingestion.cli.DatasetInsightsManager")
+    def test_timeout_passed_to_create_scan(self, mock_mgr_class):
+        """--timeout is passed to create_scan when not using --results."""
+        instance = mock_mgr_class.return_value
+        instance.create_scan.return_value = "dataset-insights-test"
+        instance.run_scan.return_value = True
+
+        result = runner.invoke(app, ["dataset-insights", "--timeout", "300"])
+
+        assert result.exit_code == 0
+        instance.create_scan.assert_called_once_with(dry_run=False, timeout=300)
+        instance.run_scan.assert_called_once()

@@ -342,7 +342,7 @@ def dataset_insights(
             json.dump(insights, f, indent=2)
         print(f"\n📄 Insights written to {output}")
     else:
-        scan_id = mgr.create_scan(dry_run=dry_run)
+        scan_id = mgr.create_scan(dry_run=dry_run, timeout=timeout)
         if scan_id and not dry_run:
             mgr.run_scan()
 
