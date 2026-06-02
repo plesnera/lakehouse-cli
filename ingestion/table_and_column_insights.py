@@ -104,13 +104,17 @@ class HybridMetadataEnricher:
             print("Metadata enrichment complete!")
 
     def generate_descriptions(self, timeout: int = 300, dry_run: bool = False):
-        """Generate hybrid descriptions for all tables in the dataset."""
+        """Generate descriptions for all tables in the dataset using manual YAML files."""
         tables = [table.table_id for table in self.client.list_tables(self.dataset_id)]
-        self._generate_descriptions_core(tables, dry_run=dry_run)
+        yaml_mapping = self._build_table_id_mapping()
+        metadata_files = [yaml_mapping.get(t) for t in tables]
+        self._generate_descriptions_core(tables, metadata_files=metadata_files, use_google_insights=False, dry_run=dry_run)
 
     def generate_descriptions_for_tables(self, table_names: List[str], timeout: int = 300, dry_run: bool = False):
-        """Generate hybrid descriptions for specific tables using default markdown files."""
-        self._generate_descriptions_core(table_names, dry_run=dry_run)
+        """Generate descriptions for specific tables using default manual YAML files."""
+        yaml_mapping = self._build_table_id_mapping()
+        metadata_files = [yaml_mapping.get(t) for t in table_names]
+        self._generate_descriptions_core(table_names, metadata_files=metadata_files, use_google_insights=False, dry_run=dry_run)
 
     def generate_descriptions_for_tables_with_google_insights(self, table_names: List[str], timeout: int = 300, dry_run: bool = False):
         """Generate descriptions using ONLY Google-style automated insights (no manual files)."""
