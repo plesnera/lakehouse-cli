@@ -68,7 +68,6 @@ class DatasetInsightsManager:
                 },
                 "type": "DATA_DOCUMENTATION",
                 "dataDocumentationSpec": {
-                    "generationScopes": "ALL",
                     "catalogPublishingEnabled": True
                 },
                 "executionSpec": {
