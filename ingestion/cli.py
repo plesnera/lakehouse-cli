@@ -1,3 +1,5 @@
+import json
+
 import typer
 from ingestion.config import Config, TABLES
 from ingestion.dataplex_lake import DataplexManager
@@ -305,6 +307,7 @@ def dataset_insights(
     results: bool = typer.Option(False, "--results", help="Show latest insights results"),
     run: bool = typer.Option(False, "--run", help="Run the dataset insights scan"),
     timeout: int = typer.Option(600, "--timeout", help="Seconds to wait for results"),
+    output: str = typer.Option("dataset_insights.json", "--output", "-o", help="Output file path for insights results"),
 ):
     """Create and run Dataplex dataset-level insights scans for AI-generated metadata.
 
@@ -326,14 +329,20 @@ def dataset_insights(
 
         # Explicitly run scan
         uv run python -m ingestion.cli dataset-insights --run
+
+        # Write results to a custom file
+        uv run python -m ingestion.cli dataset-insights --results -o my_insights.json
     """
     config = Config()
     mgr = DatasetInsightsManager(config)
 
     if results:
-        mgr.get_results(timeout=timeout)
+        insights = mgr.get_results(timeout=timeout)
+        with open(output, "w") as f:
+            json.dump(insights, f, indent=2)
+        print(f"\n📄 Insights written to {output}")
     else:
-        scan_id = mgr.create_scan(dry_run=dry_run)
+        scan_id = mgr.create_scan(dry_run=dry_run, timeout=timeout)
         if scan_id and not dry_run:
             mgr.run_scan()
 
