@@ -52,9 +52,12 @@ class RelatedEntry:
 class ExactMatch:
     """A term matched via exact or synonym column matching (Phase A)."""
     term_name: str
-    matched_columns: List[str]
-    found_in_tables: List[str]
-    via_synonym: Optional[str] = None  # set if match came via synonym
+    matched_columns: List[str]  # List of original column names that matched
+    found_in_tables: List[str]  # List of table names containing the matched columns
+    # For synonym matches, via_synonym indicates the canonical term
+    via_synonym: Optional[str] = None
+    # List of (table, column) pairs for precise matching
+    table_column_pairs: List[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -482,12 +485,12 @@ class RelatedEntriesManager:
 
         Returns ``(matches, matched_normalized_names)``.
         """
-        # Build reverse index: normalized_column -> list of table names
-        col_to_tables: dict[str, list[str]] = {}
+        # Build reverse index: normalized_column -> list of (table, original_column) pairs
+        col_to_entries: dict[str, list[tuple[str, str]]] = {}
         for table, columns in table_schemas.items():
             for col in columns:
                 key = normalize_name(col)
-                col_to_tables.setdefault(key, []).append(table)
+                col_to_entries.setdefault(key, []).append((table, col))
 
         matches: list[ExactMatch] = []
         matched_terms: set[str] = set()
@@ -495,12 +498,28 @@ class RelatedEntriesManager:
         # First pass: direct exact matches
         canonical_matches: dict[str, ExactMatch] = {}  # normalized_name -> match
         for norm_name, info in term_lookup.items():
-            if norm_name in col_to_tables:
-                tables = sorted(set(col_to_tables[norm_name]))
+            if norm_name in col_to_entries:
+                entries = col_to_entries[norm_name]
+                # Group columns by table
+                columns_by_table: dict[str, list[str]] = {}
+                for table, col in entries:
+                    columns_by_table.setdefault(table, []).append(col)
+                
+                tables = sorted(columns_by_table.keys())
+                # For exact matches, matched_columns stores the original column names
+                matched_cols = []
+                # Build table_column_pairs for precise matching
+                table_column_pairs = []
+                for table in tables:
+                    for col in columns_by_table[table]:
+                        matched_cols.append(col)
+                        table_column_pairs.append((table, col))
+                
                 m = ExactMatch(
                     term_name=info["displayName"],
-                    matched_columns=[norm_name],
+                    matched_columns=matched_cols,
                     found_in_tables=tables,
+                    table_column_pairs=table_column_pairs,
                 )
                 matches.append(m)
                 matched_terms.add(norm_name)
@@ -520,9 +539,10 @@ class RelatedEntriesManager:
                     canon = canonical_matches[canonical_norm]
                     m = ExactMatch(
                         term_name=info["displayName"],
-                        matched_columns=[f"(via synonym → {synonym_target})"],
+                        matched_columns=canon.matched_columns,
                         found_in_tables=canon.found_in_tables,
                         via_synonym=synonym_target,
+                        table_column_pairs=canon.table_column_pairs,
                     )
                     matches.append(m)
                     matched_terms.add(norm_name)
@@ -573,6 +593,7 @@ class RelatedEntriesManager:
 
     def export_proposals_yaml(
         self,
+        exact_matches: List[ExactMatch],
         fuzzy_proposals: List[FuzzyProposal],
         output_path: str,
         catalog_name: str,
@@ -581,7 +602,7 @@ class RelatedEntriesManager:
         glossary_location: Optional[str] = None,
         glossary_project: Optional[str] = None,
     ) -> None:
-        """Write Phase B fuzzy proposals to a YAML file for human curation."""
+        """Write exact matches and Phase B fuzzy proposals to a YAML file for human curation."""
         scan_meta = {
             "catalog": catalog_name,
             "namespace": namespace or "",
@@ -591,6 +612,30 @@ class RelatedEntriesManager:
             "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
+        # Export exact matches
+        exact_list: list[dict] = []
+        for m in exact_matches:
+            # Use table_column_pairs if available, otherwise fall back to Cartesian product
+            if m.table_column_pairs:
+                pairs = m.table_column_pairs
+            else:
+                # Fallback for backward compatibility
+                pairs = [(table, col) for col in m.matched_columns for table in m.found_in_tables]
+            
+            for table, col in pairs:
+                exact_list.append({
+                    "glossary_term": m.term_name,
+                    "category": "",
+                    "description": "",
+                    "table": table,
+                    "column": col,
+                    "match_type": "exact" if m.via_synonym is None else "synonym",
+                    "via_synonym": m.via_synonym or "",
+                    "match_score": 100,  # Exact matches get highest score
+                    "match_rationale": "exact match" if m.via_synonym is None else f"synonym for {m.via_synonym}",
+                })
+
+        # Export fuzzy proposals
         proposals_list: list[dict] = []
         for p in fuzzy_proposals:
             parts = p.table_column.split(".", 1)
@@ -602,21 +647,23 @@ class RelatedEntriesManager:
                 "description": p.description,
                 "table": table,
                 "column": column,
+                "match_type": "fuzzy",
+                "via_synonym": "",
                 "match_score": p.score,
                 "match_rationale": p.rationale,
             })
 
-        doc = {"scan": scan_meta, "proposals": proposals_list}
+        doc = {"scan": scan_meta, "exact_matches": exact_list, "proposals": proposals_list}
         with open(output_path, "w", encoding="utf-8") as fh:
             yaml.dump(doc, fh, sort_keys=False, allow_unicode=True, default_flow_style=False)
 
-        print(f"\n📄 Proposals written to {output_path} ({len(proposals_list)} entries)")
+        print(f"\n📄 Proposals written to {output_path} ({len(exact_list)} exact matches, {len(proposals_list)} fuzzy proposals)")
 
     @staticmethod
     def load_proposals_yaml(input_path: str) -> dict:
         """Load and validate a curated proposals YAML file.
 
-        Returns the parsed dict with ``scan`` and ``proposals`` keys.
+        Returns the parsed dict with ``scan``, ``exact_matches``, and ``proposals`` keys.
         Raises ``ValueError`` on structural problems.
         """
         path = Path(input_path)
@@ -631,15 +678,29 @@ class RelatedEntriesManager:
 
         if "scan" not in doc:
             raise ValueError("Missing required 'scan' section in proposals file")
-        if "proposals" not in doc or not isinstance(doc["proposals"], list):
+        
+        # Validate proposals list (fuzzy matches)
+        if "proposals" not in doc or not isinstance(doc.get("proposals"), list):
             raise ValueError("Missing or invalid 'proposals' list in proposals file")
+        
+        # Validate exact_matches list (optional for backward compatibility)
+        if "exact_matches" in doc and not isinstance(doc["exact_matches"], list):
+            raise ValueError("Invalid 'exact_matches' list in proposals file")
 
         # Validate each proposal has required fields
-        for i, p in enumerate(doc["proposals"]):
+        for i, p in enumerate(doc.get("proposals", [])):
             for key in ("glossary_term", "table", "column"):
                 if not p.get(key):
                     raise ValueError(
                         f"Proposal #{i + 1} is missing required field '{key}'"
+                    )
+
+        # Validate each exact match has required fields
+        for i, p in enumerate(doc.get("exact_matches", [])):
+            for key in ("glossary_term", "table", "column"):
+                if not p.get(key):
+                    raise ValueError(
+                        f"Exact match #{i + 1} is missing required field '{key}'"
                     )
 
         return doc
@@ -663,7 +724,8 @@ class RelatedEntriesManager:
         """
         doc = self.load_proposals_yaml(input_path)
         scan_meta = doc["scan"]
-        proposals = doc["proposals"]
+        proposals = doc.get("proposals", [])
+        exact_matches = doc.get("exact_matches", [])
 
         glossary_id = glossary_override or scan_meta.get("glossary", "")
         project = project_override or scan_meta.get("glossary_project", self.config.project_id)
@@ -671,7 +733,8 @@ class RelatedEntriesManager:
         catalog_name = scan_meta.get("catalog", "")
         namespace = scan_meta.get("namespace", "")
 
-        print(f"Applying {len(proposals)} proposals from {input_path}...")
+        total_entries = len(proposals) + len(exact_matches)
+        print(f"Applying {total_entries} entries from {input_path} ({len(exact_matches)} exact matches, {len(proposals)} fuzzy proposals)...")
         print(f"Glossary: {glossary_id} ({location})")
         print(f"Catalog:  {catalog_name} / {namespace}")
 
@@ -679,6 +742,99 @@ class RelatedEntriesManager:
             print("\n--- DRY RUN (no changes will be made) ---")
 
         results: list[ApplyResult] = []
+        
+        # Process exact matches first
+        for p in exact_matches:
+            term = p["glossary_term"]
+            table = p["table"]
+            column = p["column"]
+            table_column = f"{table}.{column}"
+
+            # Construct the BiGLake entry name
+            entry_name = self._build_biglake_entry_name(
+                project=project,
+                location=location,
+                catalog_name=catalog_name,
+                namespace=namespace,
+                table=table,
+            )
+
+            # Construct the glossary term entry name
+            term_entry_name = self._build_glossary_term_entry_name(
+                project=project,
+                location=location,
+                glossary_id=glossary_id,
+                term_name=term,
+            )
+
+            if dry_run:
+                results.append(ApplyResult(
+                    glossary_term=term,
+                    table_column=table_column,
+                    status="dry-run",
+                    detail=f"Would link {term_entry_name} → {entry_name} (column: {column})",
+                ))
+                continue
+
+            # Verify the entry exists
+            try:
+                self._run_gcloud([
+                    "dataplex", "entries", "describe",
+                    f"biglake.googleapis.com/projects/{project}/catalogs/{catalog_name}/namespaces/{namespace}/tables/{table}",
+                    "--entry-group=@biglake",
+                    f"--location={location}",
+                    f"--project={project}",
+                ])
+            except RuntimeError:
+                results.append(ApplyResult(
+                    glossary_term=term,
+                    table_column=table_column,
+                    status="error",
+                    detail="Entry not found",
+                ))
+                continue
+
+            # Check for existing relation (idempotency)
+            existing = self._check_existing_relation(
+                project=project,
+                location=location,
+                glossary_id=glossary_id,
+                term_name=term,
+                entry_name=entry_name,
+            )
+            if existing:
+                results.append(ApplyResult(
+                    glossary_term=term,
+                    table_column=table_column,
+                    status="skipped",
+                    detail="Relation already exists",
+                ))
+                continue
+
+            # Create the related-entry link
+            try:
+                self._create_related_entry_link(
+                    project=project,
+                    location=location,
+                    glossary_id=glossary_id,
+                    term_name=term,
+                    target_entry=entry_name,
+                    column=column,
+                )
+                results.append(ApplyResult(
+                    glossary_term=term,
+                    table_column=table_column,
+                    status="created",
+                ))
+            except RuntimeError as exc:
+                results.append(ApplyResult(
+                    glossary_term=term,
+                    table_column=table_column,
+                    status="error",
+                    detail=str(exc),
+                ))
+
+        # Process fuzzy proposals
         for p in proposals:
             term = p["glossary_term"]
             table = p["table"]

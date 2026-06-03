@@ -516,7 +516,7 @@ def scan_for_related_entries(
     """
     config = Config()
     mgr = RelatedEntriesManager(config)
-    _exact, fuzzy = mgr.scan_for_related_entries(
+    exact, fuzzy = mgr.scan_for_related_entries(
         catalog_name=catalog, namespace=namespace, glossary=glossary
     )
 
@@ -525,6 +525,7 @@ def scan_for_related_entries(
         glossary_info = mgr._discover_glossary(glossary)
         glossary_id = glossary_info["name"].rsplit("/", 1)[-1]
         mgr.export_proposals_yaml(
+            exact_matches=exact,
             fuzzy_proposals=fuzzy,
             output_path=output,
             catalog_name=catalog,
