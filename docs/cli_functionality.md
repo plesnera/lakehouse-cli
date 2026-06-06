@@ -305,7 +305,8 @@ uv run python -m ingestion.cli scan-for-related-entries \
 uv run python -m ingestion.cli scan-for-related-entries \
   --catalog wpp-dataproducts-lakehouse-warehouse \
   --namespace marketing \
-  --output proposals.yaml
+  --output proposals.yaml \
+  --fuzzy-score-threshold 10
 ```
 
 Options:
@@ -313,6 +314,16 @@ Options:
 - `--namespace`: optional namespace filter within the catalog
 - `--glossary`: glossary ID or display name (default: first glossary found)
 - `--output` / `-o`: write Phase B proposals to a YAML file for curation and later apply
+- `--fuzzy-score-threshold`: filter out fuzzy proposals with a score below this threshold
+- `--project`: override the Google Cloud project written into the exported YAML (default: derived from the discovered glossary's resource path)
+- `--location`: override the location written into the exported YAML (default: derived from the discovered glossary's resource path)
+
+The project and location used when `--output` is given are resolved in this order:
+1. explicit `--project` / `--location` flag
+2. project and location parsed out of the discovered glossary's `name` (e.g. `projects/{p}/locations/{l}/glossaries/{id}`)
+3. the values from `Config`
+
+This avoids writing a silent fallback (e.g. a placeholder project string) into the YAML, so the subsequent `apply-related-entries` step targets the correct Dataplex project.
 
 #### Workflow for `scan-for-related-entries`
 
@@ -330,14 +341,16 @@ Below is a step-by-step description of what happens when you run the command:
 ### `apply-related-entries`
 Applies curated related-entry proposals from a YAML file to Dataplex Catalog.
 
-This command reads a proposals file (produced by `scan-for-related-entries --output`), validates each proposal, and creates related-entry links in Dataplex Catalog. The command is idempotent: existing relations are skipped with an informational message rather than duplicated.
+This command reads a proposals file (produced by `scan-for-related-entries --output`), validates each proposal, and creates **Dataplex entry-links** of type `entryLinkTypes/definition` via the `gcloud alpha dataplex entry-links create` subcommand. Each link is a `term ↔ asset` relation between a glossary-term entry and a BigLake table entry. The command is idempotent: existing relations (gcloud's `ALREADY_EXISTS` error) are skipped with an informational message rather than duplicated.
+
+The link is created in the **`@biglake`** entry-group (the SOURCE entry's group, which the API requires for a `definition` link) with the BigLake entry listed first as `SOURCE` and the term entry second as `TARGET`.
 
 #### Workflow
 
 1. **Scan** — `scan-for-related-entries --output proposals.yaml` exports proposals.
 2. **Curate** — A data steward edits `proposals.yaml`, removing incorrect rows.
 3. **Preview** — `apply-related-entries --input proposals.yaml --dry-run` validates and previews.
-4. **Apply** — `apply-related-entries --input proposals.yaml` creates the related-entry links.
+4. **Apply** — `apply-related-entries --input proposals.yaml` creates the entry-links.
 
 ```bash
 # Preview changes
@@ -364,6 +377,38 @@ Options:
 - `--project`: override the Google Cloud project
 - `--location`: override the location (default: from file or `us-east1`)
 
+#### How the link is created
+
+For each curated row, the CLI:
+
+1. Pre-flights a `gcloud dataplex entries describe` against the BigLake entry to surface actionable errors for typos in catalog/table/namespace.
+2. Resolves the GCP project **number** for the catalog project (via `gcloud projects describe`) — the Dataplex API requires the project number in entry-name references and rejects the project ID with "Entry ID must contain project number."
+3. Builds the BigLake entry resource path (SOURCE) using the project number on the outer Dataplex path and the project ID on the inner BigLake segment:
+   `projects/{project_number}/locations/{location}/entryGroups/@biglake/entries/biglake.googleapis.com/projects/{project_id}/catalogs/{catalog}/namespaces/{ns}/tables/{table}`
+4. Builds the term-entry resource path (TARGET) using the project number on both outer and inner segments:
+   `projects/{project_number}/locations/{location}/entryGroups/@dataplex/entries/projects/{project_number}/locations/{location}/glossaries/{glossary_id}/terms/{term_slug}`
+   The inner project segment is read from the first term's `parent` resource path (so the link targets the right Dataplex project even when terms live in a different project from the catalog).
+5. Computes a deterministic entry-link id: `definition-{term_slug}-{ns}-{table_slug}` truncated to 63 chars (the Dataplex resource-id limit). Both the term name and the table name are slugified (lowercase, spaces/underscores → hyphens) so the id only contains `[a-z0-9-]`.
+6. Invokes `gcloud alpha dataplex entry-links create`:
+   ```
+   gcloud alpha dataplex entry-links create <entry_link_id> \
+     --entry-group=@biglake \
+     --location=<location> \
+     --project=<project> \
+     --entry-link-type=projects/dataplex-types/locations/global/entryLinkTypes/definition \
+     --entry-references=<tempfile.yaml>
+   ```
+   where `<tempfile.yaml>` contains:
+   ```yaml
+   - name: <biglake_entry_ref>
+     type: SOURCE
+   - name: <term_entry_ref>
+     type: TARGET
+   ```
+7. Maps the gcloud exit code to an `ApplyResult`: `created` on exit 0, `skipped` on `ALREADY_EXISTS`, `error` on any other failure. The raw gcloud stderr is surfaced in the `detail` column.
+
+When a row fails (e.g. the target entry does not exist on the project), the summary includes the underlying error in the `detail` column — the raw gcloud error from the pre-flight describe, or the raw gcloud stderr from `entry-links create` (e.g. `Permission denied: dataplex.googleapis.com`) — instead of a generic "Entry not found" message. This makes it easy to spot IAM or project-mismatch issues.
+
 ### `reset`
 Deletes generated metadata resources for a clean re-run.
 
@@ -383,4 +428,4 @@ Behavior:
 - Metadata parsing: `ingestion/table_metadata.py`
 - Glossary manager: `ingestion/glossary_manager.py`
 - Data quality manager: `ingestion/data_quality.py`
-- Related entries manager: `ingestion/related_entries.py` (includes proposals export/import and apply logic)
+- Related entries manager: `ingestion/related_entries.py` (includes proposals export/import, the gcloud-based entry-link creation helper, and the apply logic that targets `entryLinkTypes/definition`)

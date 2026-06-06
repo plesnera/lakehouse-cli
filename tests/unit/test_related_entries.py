@@ -407,6 +407,7 @@ class TestExportAndLoadProposalsYaml:
         output_file = str(tmp_path / "proposals.yaml")
 
         mgr.export_proposals_yaml(
+            exact_matches=[],
             fuzzy_proposals=self._sample_proposals(),
             output_path=output_file,
             catalog_name="my-catalog",
@@ -436,6 +437,7 @@ class TestExportAndLoadProposalsYaml:
         mgr = self._make_manager()
         output_file = str(tmp_path / "empty.yaml")
         mgr.export_proposals_yaml(
+            exact_matches=[],
             fuzzy_proposals=[],
             output_path=output_file,
             catalog_name="c",
@@ -455,10 +457,22 @@ class TestExportAndLoadProposalsYaml:
         with pytest.raises(ValueError, match="Missing required 'scan'"):
             RelatedEntriesManager.load_proposals_yaml(str(bad))
 
-    def test_load_missing_proposals_list(self, tmp_path):
+    def test_load_missing_proposals_list_is_ok(self, tmp_path):
+        """A `proposals:` key is optional — a scan may produce zero fuzzy
+        matches, in which case the key is simply omitted. The loader must
+        accept the file and return an empty list for ``proposals``."""
+        ok = tmp_path / "ok.yaml"
+        ok.write_text("scan:\n  catalog: c\n")
+        doc = RelatedEntriesManager.load_proposals_yaml(str(ok))
+        assert doc["scan"] == {"catalog": "c"}
+        assert doc.get("proposals", []) == []
+
+    def test_load_invalid_proposals_type_raises(self, tmp_path):
+        """If `proposals:` IS present but is not a list, the loader must
+        still raise — that is a real schema error, not an absent key."""
         bad = tmp_path / "bad.yaml"
-        bad.write_text("scan:\n  catalog: c\n")
-        with pytest.raises(ValueError, match="Missing or invalid 'proposals'"):
+        bad.write_text("scan:\n  catalog: c\nproposals: not-a-list\n")
+        with pytest.raises(ValueError, match="Invalid 'proposals'"):
             RelatedEntriesManager.load_proposals_yaml(str(bad))
 
     def test_load_missing_required_field(self, tmp_path):
@@ -483,6 +497,11 @@ class TestExportAndLoadProposalsYaml:
 
 class TestBuildEntryNames:
     def test_biglake_entry_name(self):
+        # The inner `biglake.googleapis.com/...` segment does NOT include
+        # a `locations/{l}` segment between `projects/{p}/` and `catalogs/{c}/`
+        # — verified against the live `gcloud dataplex entries list` output.
+        # Including it would cause `gcloud dataplex entries describe` to
+        # return NOT_FOUND even when the entry exists.
         result = RelatedEntriesManager._build_biglake_entry_name(
             project="my-project",
             location="us-east1",
@@ -497,29 +516,75 @@ class TestBuildEntryNames:
             "/catalogs/my-catalog/namespaces/marketing/tables/pixel_events"
         )
 
-    def test_glossary_term_entry_name(self):
-        result = RelatedEntriesManager._build_glossary_term_entry_name(
+    def test_biglake_entry_name_without_namespace(self):
+        # Same shape, but with no namespace segment in the path.
+        result = RelatedEntriesManager._build_biglake_entry_name(
             project="my-project",
             location="us-east1",
-            glossary_id="marketing-glossary",
+            catalog_name="my-catalog",
+            namespace="",
+            table="audience",
+        )
+        assert result == (
+            "projects/my-project/locations/us-east1"
+            "/entryGroups/@biglake/entries/"
+            "biglake.googleapis.com/projects/my-project"
+            "/catalogs/my-catalog/tables/audience"
+        )
+
+    def test_glossary_term_entry_name(self):
+        # The full path embeds the project segment that lives inside the
+        # entry-id (the "inner" project).  In the canonical setup the
+        # outer and inner project segments are equal; in cross-project
+        # setups they can differ.  The function takes both explicitly.
+        result = RelatedEntriesManager._build_glossary_term_entry_name(
+            outer_project="my-project",
+            location="us-east1",
+            entry_group="@dataplex",
+            inner_project="my-project",
+            glossary_id="marketing-business-glossary",
             term_name="impression",
         )
         assert result == (
             "projects/my-project/locations/us-east1"
-            "/entryGroups/@glossary/entries/"
-            "glossary.googleapis.com/projects/my-project"
-            "/locations/us-east1/glossaries/marketing-glossary/terms/impression"
+            "/entryGroups/@dataplex/entries/"
+            "projects/my-project/locations/us-east1"
+            "/glossaries/marketing-business-glossary/terms/impression"
         )
 
     def test_glossary_term_entry_name_with_underscores(self):
         result = RelatedEntriesManager._build_glossary_term_entry_name(
-            project="p",
+            outer_project="p",
             location="us-east1",
+            entry_group="eg",
+            inner_project="p",
             glossary_id="g",
             term_name="country_code",
         )
-        # underscores become hyphens in the slug
-        assert "/terms/country-code" in result
+        # underscores become hyphens in the slug, and the inner-project
+        # segment is preserved.
+        assert result.endswith(
+            "/entries/projects/p/locations/us-east1/glossaries/g/terms/country-code"
+        )
+
+    def test_glossary_term_entry_name_inner_project_can_differ(self):
+        """Cross-project setups may have an inner-project segment that
+        differs from the outer (catalog) project segment.  Both must be
+        preserved verbatim in the resulting path."""
+        result = RelatedEntriesManager._build_glossary_term_entry_name(
+            outer_project="catalog-proj",
+            location="us-east1",
+            entry_group="@dataplex",
+            inner_project="data-proj",
+            glossary_id="my-glossary",
+            term_name="region",
+        )
+        assert result == (
+            "projects/catalog-proj/locations/us-east1"
+            "/entryGroups/@dataplex/entries/"
+            "projects/data-proj/locations/us-east1"
+            "/glossaries/my-glossary/terms/region"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -574,16 +639,28 @@ class TestApplyProposalsDryRun:
         return path
 
     def test_dry_run_no_gcloud_calls(self, tmp_path):
-        """Dry-run should not invoke any gcloud commands."""
+        """Dry-run should not invoke gcloud for create/update operations.
+
+        It MAY call ``entry-groups list`` once at the start, so the printed
+        "Would link …" preview shows the correct entry-group segment of the
+        term-entry name rather than a placeholder.  We assert that no calls
+        to ``dataplex entries describe/update`` happen.
+        """
         mgr = self._make_manager()
         proposals_path = self._write_proposals(tmp_path)
 
-        # Patch _run_gcloud to ensure it is NOT called
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         with patch.object(mgr, "_run_gcloud") as mock_gcloud:
-            results = mgr.apply_proposals(proposals_path, dry_run=True)
+            with patch.object(mgr, "_resolve_project_number", return_value="test-project"):
+                results = mgr.apply_proposals(proposals_path, dry_run=True)
 
-        mock_gcloud.assert_not_called()
+        # No entries describe/update calls (would mutate state).
+        mutating = [
+            call for call in mock_gcloud.call_args_list
+            if any("entries" in str(a) and ("describe" in str(a) or "update" in str(a))
+                   for a in call.args)
+        ]
+        assert mutating == [], f"dry-run made mutating calls: {mutating}"
         assert len(results) == 2
         assert all(r.status == "dry-run" for r in results)
         assert results[0].glossary_term == "impression"
@@ -597,13 +674,14 @@ class TestApplyProposalsDryRun:
 
         from unittest.mock import patch
         with patch.object(mgr, "_run_gcloud"):
-            results = mgr.apply_proposals(
-                proposals_path,
-                dry_run=True,
-                glossary_override="other-glossary",
-                project_override="other-project",
-                location_override="eu-west1",
-            )
+            with patch.object(mgr, "_resolve_project_number", return_value="test-project"):
+                results = mgr.apply_proposals(
+                    proposals_path,
+                    dry_run=True,
+                    glossary_override="other-glossary",
+                    project_override="other-project",
+                    location_override="eu-west1",
+                )
 
         # Check that overrides appear in the detail string
         assert "other-project" in results[0].detail
@@ -623,3 +701,690 @@ class TestApplyResult:
     def test_with_detail(self):
         r = ApplyResult(glossary_term="t", table_column="t.c", status="error", detail="oops")
         assert r.detail == "oops"
+
+
+# ---------------------------------------------------------------------------
+# export_proposals_yaml metadata round-trip
+# ---------------------------------------------------------------------------
+
+class TestExportProposalsYaml:
+    """Ensure the YAML written by export_proposals_yaml reflects the
+    glossary_project / glossary_location arguments the CLI passed in.
+    """
+
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="test-project",
+            catalog_project_id="test-project",
+            location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def test_yaml_records_explicit_project_and_location(self, tmp_path):
+        """When the CLI passes explicit glossary_project / glossary_location
+        values, the resulting YAML's ``scan`` section must record them so
+        apply-related-entries targets the correct GCP project."""
+        mgr = self._make_manager()
+        output_file = str(tmp_path / "proposals.yaml")
+
+        mgr.export_proposals_yaml(
+            exact_matches=[],
+            fuzzy_proposals=[],
+            output_path=output_file,
+            catalog_name="my-catalog",
+            namespace="marketing",
+            glossary_id="my-glossary",
+            glossary_project="lakehouse-proj",
+            glossary_location="eu-west1",
+        )
+
+        doc = RelatedEntriesManager.load_proposals_yaml(output_file)
+        assert doc["scan"]["glossary_project"] == "lakehouse-proj"
+        assert doc["scan"]["glossary_location"] == "eu-west1"
+        assert doc["scan"]["glossary"] == "my-glossary"
+
+    def test_yaml_falls_back_to_config_when_unset(self, tmp_path):
+        """When the caller does not pass glossary_project / glossary_location,
+        the function must still record something usable — i.e. the config's
+        project_id and location, not a literal fallback string like
+        'my-gcp-project'."""
+        mgr = self._make_manager()
+        output_file = str(tmp_path / "proposals.yaml")
+
+        mgr.export_proposals_yaml(
+            exact_matches=[],
+            fuzzy_proposals=[],
+            output_path=output_file,
+            catalog_name="c",
+            namespace=None,
+            glossary_id="g",
+        )
+
+        doc = RelatedEntriesManager.load_proposals_yaml(output_file)
+        assert doc["scan"]["glossary_project"] == "test-project"
+        assert doc["scan"]["glossary_location"] == "us-east1"
+
+
+# ---------------------------------------------------------------------------
+# apply_proposals makes the correct gcloud entry-links create call
+# ---------------------------------------------------------------------------
+
+class TestApplyProposalsGcloudCall:
+    """Pin down the exact ``gcloud alpha dataplex entry-links create`` call
+    made per row, alongside the pre-flight ``gcloud dataplex entries describe``
+    call.
+
+    Regression coverage for two related bugs:
+    - The old gcloud aspect-based path failed with
+      ``403 Permission denied … (or it may not exist)`` on missing terms and
+      ``403`` on the unregistered ``wpp-dataproducts-lakehouse.us-east1.relatedEntries``
+      aspect type.  The new path uses the gcloud ``entry-links create`` subcommand
+      (alpha) with link type ``definition``.
+    - The inner ``biglake.googleapis.com/...`` segment of the BigLake entry-id
+      must NOT include a redundant ``locations/{l}`` token — that returns
+      NOT_FOUND on the pre-flight ``entries describe`` even when the entry
+      exists.
+    - The link must be created in the ``@biglake`` entry-group (the SOURCE
+      entry's group) with BigLake as SOURCE first and the term as TARGET
+      second (verified against the live API on 2026-06-05).
+    """
+
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="wpp-dataproducts-lakehouse",
+            catalog_project_id="wpp-dataproducts-lakehouse",
+            location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def _write_proposals(self, tmp_path, *, with_namespace: bool = True) -> str:
+        import yaml
+        doc = {
+            "scan": {
+                "catalog": "wpp-dataproducts-lakehouse-warehouse",
+                "namespace": "marketing" if with_namespace else "",
+                "glossary": "marketing-business-glossary",
+                "glossary_location": "us-east1",
+                "glossary_project": "wpp-dataproducts-lakehouse",
+                "scanned_at": "2026-06-04T20:38:23Z",
+            },
+            "exact_matches": [
+                {
+                    "glossary_term": "region",
+                    "category": "Campaign",
+                    "description": "Related to country_code.",
+                    "table": "marketing/audience" if with_namespace else "audience",
+                    "column": "region",
+                    "match_type": "exact",
+                    "via_synonym": "",
+                    "match_score": 100,
+                    "match_rationale": "exact match",
+                },
+            ],
+            "proposals": [],
+        }
+        path = str(tmp_path / "proposals.yaml")
+        with open(path, "w") as fh:
+            yaml.dump(doc, fh, sort_keys=False)
+        return path
+
+    def _capture_subprocess_run(self, captured_args):
+        """Return a fake ``subprocess.run`` that records argv lists."""
+        def fake_run(argv, **kwargs):
+            captured_args.append(list(argv))
+            # Return a CompletedProcess-like with rc=0, no stderr
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return fake_run
+
+    def test_preflight_describe_and_gcloud_entry_links_create(self, tmp_path):
+        """The pre-flight ``gcloud dataplex entries describe`` call must use
+        ``biglake.googleapis.com/projects/{p}/catalogs/{c}/namespaces/{n}/tables/{t}``
+        (no ``locations/{l}``), and the follow-up ``gcloud alpha dataplex
+        entry-links create`` must target ``@biglake`` with BigLake as SOURCE
+        first and the term as TARGET second."""
+        from unittest.mock import patch
+        import os, yaml as _yaml
+        mgr = self._make_manager()
+        proposals_path = self._write_proposals(tmp_path, with_namespace=True)
+
+        captured_args: list[list[str]] = []
+        captured_refs_doc: list[list] = []
+
+        def fake_gcloud(args, **kwargs):
+            captured_args.append(list(args))
+            return {}
+
+        def fake_run(argv, **kwargs):
+            captured_args.append(list(argv))
+            # Snapshot the references YAML while the tempfile is still alive
+            for a in argv:
+                if a.startswith("--entry-references="):
+                    refs_path = a.split("=", 1)[1]
+                    if os.path.isfile(refs_path):
+                        with open(refs_path) as fh:
+                            captured_refs_doc.append(_yaml.safe_load(fh))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with patch.object(mgr, "_run_gcloud", side_effect=fake_gcloud):
+            with patch.object(mgr, "_resolve_project_number", return_value="wpp-dataproducts-lakehouse"):
+                with patch.object(mgr, "_resolve_glossary_inner_project", return_value="wpp-dataproducts-lakehouse"):
+                    with patch(
+                        "ingestion.related_entries.subprocess.run",
+                        side_effect=fake_run,
+                    ):
+                        mgr.apply_proposals(proposals_path, dry_run=False)
+
+        # Pre-flight describe for the BigLake entry
+        describe_calls = [
+            args for args in captured_args
+            if "describe" in args and "biglake.googleapis.com" in " ".join(args)
+        ]
+        assert describe_calls, f"no pre-flight describe call captured; saw: {captured_args}"
+        describe = describe_calls[0]
+        idx = describe.index("describe")
+        entry_id = describe[idx + 1]
+        assert entry_id == (
+            "biglake.googleapis.com/projects/wpp-dataproducts-lakehouse"
+            "/catalogs/wpp-dataproducts-lakehouse-warehouse"
+            "/namespaces/marketing/tables/audience"
+        )
+        assert "--location=us-east1" in describe
+        assert "--project=wpp-dataproducts-lakehouse" in describe
+        assert "--entry-group=@biglake" in describe
+
+        # gcloud entry-links create call shape
+        create_calls = [
+            args for args in captured_args
+            if "entry-links" in args and "create" in args
+        ]
+        assert len(create_calls) == 1, (
+            f"expected exactly one entry-links create call; saw: {create_calls}"
+        )
+        create = create_calls[0]
+        # argv layout: [gcloud, alpha, dataplex, entry-links, create, <id>, ...flags]
+        assert create[:5] == ["gcloud", "alpha", "dataplex", "entry-links", "create"]
+        entry_link_id_positional = create[5]
+        assert entry_link_id_positional == "definition-region-marketing-audience"
+        # Link lives in @biglake (the SOURCE entry's group), with the
+        # documented entryLinkTypes/definition link type.
+        assert "--entry-group=@biglake" in create
+        assert "--location=us-east1" in create
+        assert "--project=wpp-dataproducts-lakehouse" in create
+        assert (
+            "--entry-link-type=projects/dataplex-types/locations/global/entryLinkTypes/definition"
+            in create
+        )
+        # The references flag points to a YAML file with the right shape.
+        assert any(a.startswith("--entry-references=") for a in create)
+        assert len(captured_refs_doc) == 1
+        refs_doc = captured_refs_doc[0]
+        # BigLake must be SOURCE first; term must be TARGET second.
+        assert refs_doc[0]["type"] == "SOURCE"
+        assert refs_doc[0]["name"].endswith("/namespaces/marketing/tables/audience")
+        assert refs_doc[1]["type"] == "TARGET"
+        assert refs_doc[1]["name"].endswith("/glossaries/marketing-business-glossary/terms/region")
+
+    def test_preflight_describe_entry_id_without_namespace(self, tmp_path):
+        """When the row's table has no namespace prefix, the pre-flight
+        describe call's entry-id must drop the ``/namespaces/{n}/`` segment."""
+        from unittest.mock import patch
+        mgr = self._make_manager()
+        proposals_path = self._write_proposals(tmp_path, with_namespace=False)
+
+        captured_args: list[list[str]] = []
+
+        def fake_gcloud(args, **kwargs):
+            captured_args.append(list(args))
+            return {}
+
+        with patch.object(mgr, "_run_gcloud", side_effect=fake_gcloud):
+            with patch.object(mgr, "_resolve_project_number", return_value="wpp-dataproducts-lakehouse"):
+                with patch.object(mgr, "_resolve_glossary_inner_project", return_value="wpp-dataproducts-lakehouse"):
+                    with patch(
+                        "ingestion.related_entries.subprocess.run",
+                        side_effect=self._capture_subprocess_run(captured_args),
+                    ):
+                        mgr.apply_proposals(proposals_path, dry_run=False)
+
+        describe_calls = [
+            args for args in captured_args
+            if "describe" in args and "biglake.googleapis.com" in " ".join(args)
+        ]
+        assert describe_calls, f"no pre-flight describe call captured; saw: {captured_args}"
+        describe = describe_calls[0]
+        idx = describe.index("describe")
+        entry_id = describe[idx + 1]
+        assert entry_id == (
+            "biglake.googleapis.com/projects/wpp-dataproducts-lakehouse"
+            "/catalogs/wpp-dataproducts-lakehouse-warehouse/tables/audience"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _create_entry_link: subprocess wrapper around gcloud alpha entry-links create
+# ---------------------------------------------------------------------------
+
+class TestCreateEntryLink:
+    """Pin down the gcloud subprocess invocation, the references YAML file,
+    and the mapping of gcloud exit codes / stderr into outcomes.
+    """
+
+    def _ok_result(self):
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    def _err_result(self, stderr: str, rc: int = 1):
+        return type("R", (), {"returncode": rc, "stdout": "", "stderr": stderr})()
+
+    def test_writes_references_yaml_with_source_first(self, tmp_path):
+        """The references YAML must put the BigLake entry first as SOURCE
+        and the term entry second as TARGET.  The tempfile is removed on
+        success."""
+        from unittest.mock import patch
+        mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)  # bypass __init__
+        with patch(
+            "ingestion.related_entries.subprocess.run",
+            return_value=self._ok_result(),
+        ) as mock_run:
+            outcome, detail = mgr._create_entry_link(
+                project="p",
+                location="l",
+                link_entry_group="@biglake",
+                entry_link_id="definition-x",
+                source_entry_ref="projects/p/locations/l/entryGroups/@biglake/entries/.../audience",
+                target_entry_ref="projects/p/locations/l/entryGroups/@dataplex/entries/.../terms/region",
+            )
+        assert outcome == "created"
+        assert detail == ""
+        # Subprocess got the right argv
+        argv = mock_run.call_args.args[0]
+        assert "gcloud" in argv
+        assert "entry-links" in argv
+        assert "create" in argv
+        assert "definition-x" in argv
+        assert "--entry-group=@biglake" in argv
+        assert (
+            "--entry-link-type=projects/dataplex-types/locations/global/entryLinkTypes/definition"
+            in argv
+        )
+        # Find the references file
+        refs_idx = argv.index([a for a in argv if a.startswith("--entry-references=")][0])
+        refs_path = argv[refs_idx].split("=", 1)[1]
+        # Tempfile was cleaned up
+        import os
+        assert not os.path.exists(refs_path), f"tempfile leaked: {refs_path}"
+        # But during the call, the file was written with the right shape.
+        # (We can't read it post-delete; instead, capture the file path that
+        # was passed and read it via a separate invocation pattern in the
+        # next test.)
+
+    def test_references_yaml_shape(self, tmp_path, monkeypatch):
+        """Inspect the references YAML that gets passed to gcloud.  Use a
+        fake subprocess.run that intercepts the path and reads the file."""
+        from unittest.mock import patch
+        import os, yaml as _yaml
+
+        seen_refs_path: list[str] = []
+
+        def fake_run(argv, **kwargs):
+            for a in argv:
+                if a.startswith("--entry-references="):
+                    seen_refs_path.append(a.split("=", 1)[1])
+            return self._ok_result()
+
+        mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)
+        with patch("ingestion.related_entries.subprocess.run", side_effect=fake_run):
+            mgr._create_entry_link(
+                project="p",
+                location="l",
+                link_entry_group="@biglake",
+                entry_link_id="definition-x",
+                source_entry_ref=(
+                    "projects/p/locations/l/entryGroups/@biglake/entries/"
+                    "biglake.googleapis.com/projects/p/catalogs/cat/tables/t"
+                ),
+                target_entry_ref=(
+                    "projects/p/locations/l/entryGroups/@dataplex/entries/"
+                    "projects/p/locations/l/glossaries/g/terms/region"
+                ),
+            )
+
+        assert len(seen_refs_path) == 1
+        # Tempfile has been deleted by the cleanup block, so we re-create a
+        # temporary capture pattern: monkey-patch os.unlink to no-op so we
+        # can read the file.
+        # (Re-run with monkey-patched unlink for inspection.)
+        import tempfile as _tempfile
+        with patch("ingestion.related_entries.os.unlink"):  # don't delete
+            with patch(
+                "ingestion.related_entries.subprocess.run",
+                side_effect=fake_run,
+            ):
+                mgr._create_entry_link(
+                    project="p",
+                    location="l",
+                    link_entry_group="@biglake",
+                    entry_link_id="definition-x",
+                    source_entry_ref="A",
+                    target_entry_ref="B",
+                )
+
+        # Read the file content
+        with open(seen_refs_path[1]) as fh:
+            doc = _yaml.safe_load(fh)
+        assert doc == [
+            {"name": "A", "type": "SOURCE"},
+            {"name": "B", "type": "TARGET"},
+        ]
+
+    def test_already_exists_returns_skipped(self):
+        """A stderr containing ALREADY_EXISTS is mapped to 'skipped' with a
+        friendly detail message, not 'error'."""
+        from unittest.mock import patch
+        mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)
+        err = (
+            "ERROR: (gcloud.alpha.dataplex.entry-links.create) "
+            "ALREADY_EXISTS: EntryLink already exists."
+        )
+        with patch(
+            "ingestion.related_entries.subprocess.run",
+            return_value=self._err_result(err, rc=1),
+        ):
+            outcome, detail = mgr._create_entry_link(
+                project="p", location="l", link_entry_group="@biglake",
+                entry_link_id="x", source_entry_ref="a", target_entry_ref="b",
+            )
+        assert outcome == "skipped"
+        assert "already exists" in detail.lower()
+
+    def test_other_error_returns_error_with_stderr(self):
+        from unittest.mock import patch
+        mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)
+        err = "ERROR: (gcloud.alpha.dataplex.entry-links.create) Permission denied"
+        with patch(
+            "ingestion.related_entries.subprocess.run",
+            return_value=self._err_result(err, rc=1),
+        ):
+            outcome, detail = mgr._create_entry_link(
+                project="p", location="l", link_entry_group="@biglake",
+                entry_link_id="x", source_entry_ref="a", target_entry_ref="b",
+            )
+        assert outcome == "error"
+        assert "Permission denied" in detail
+
+
+# ---------------------------------------------------------------------------
+# Entry-link id slug shape (truncation, hyphenation, empty-ns collapse)
+# ---------------------------------------------------------------------------
+
+class TestEntryLinkIdSlugShape:
+    """Pin down the deterministic, 63-char-bounded entry-link id used as
+    the positional ``ENTRY_LINK`` argument on ``entry-links create``.
+
+    Format: ``definition-{term_slug}-{ns}-{table}`` truncated to 63 chars.
+    """
+
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="p", catalog_project_id="p", location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def _run_apply(self, mgr, term, table, namespace=""):
+        import yaml
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as td:
+            import os
+            path = os.path.join(td, "p.yaml")
+            doc = {
+                "scan": {
+                    "catalog": "cat",
+                    "namespace": namespace,
+                    "glossary": "gloss",
+                    "glossary_location": "us-east1",
+                    "glossary_project": "p",
+                    "scanned_at": "2026-06-04T20:38:23Z",
+                },
+                "exact_matches": [{
+                    "glossary_term": term, "category": "", "description": "",
+                    "table": table, "column": "region",
+                    "match_type": "exact", "via_synonym": "",
+                    "match_score": 100, "match_rationale": "exact match",
+                }],
+                "proposals": [],
+            }
+            with open(path, "w") as fh:
+                yaml.dump(doc, fh, sort_keys=False)
+
+            captured: list[list[str]] = []
+            def fake_run(argv, **kwargs):
+                captured.append(list(argv))
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            with patch.object(mgr, "_run_gcloud", return_value={}):
+                with patch.object(mgr, "_resolve_project_number", return_value="p"):
+                    with patch.object(mgr, "_resolve_glossary_inner_project", return_value="p"):
+                        with patch(
+                            "ingestion.related_entries.subprocess.run",
+                            side_effect=fake_run,
+                        ):
+                            mgr.apply_proposals(path, dry_run=False)
+            return captured
+
+    def test_basic_slug(self):
+        mgr = self._make_manager()
+        captured = self._run_apply(mgr, "region", "marketing/audience")
+        # argv[5] is the positional ENTRY_LINK id
+        assert captured[0][5] == "definition-region-marketing-audience"
+
+    def test_underscores_and_spaces_become_hyphens(self):
+        mgr = self._make_manager()
+        captured = self._run_apply(mgr, "Country Code", "marketing/audience_data")
+        assert captured[0][5] == "definition-country-code-marketing-audience-data"
+
+    def test_truncates_to_63_chars(self):
+        mgr = self._make_manager()
+        long_term = "a" * 60
+        captured = self._run_apply(mgr, long_term, "marketing/some_table")
+        entry_link_id = captured[0][5]
+        assert len(entry_link_id) <= 63
+        assert entry_link_id.startswith("definition-aaaa")
+
+    def test_empty_namespace_collapses(self):
+        """When the row has no namespace prefix (and the scan metadata is
+        also empty), the entry-link id still has a well-formed shape with
+        two hyphens around the empty segment, not three."""
+        mgr = self._make_manager()
+        captured = self._run_apply(mgr, "region", "audience", namespace="")
+        # definition-region--audience  (double hyphen from the empty ns segment)
+        assert captured[0][5] == "definition-region--audience"
+
+
+# ---------------------------------------------------------------------------
+# apply_proposals: gcloud entry-links errors surface in ApplyResult.detail
+# ---------------------------------------------------------------------------
+
+class TestApplyProposalsGcloudError:
+    """When ``gcloud alpha dataplex entry-links create`` returns a non-zero
+    exit code, the resulting ``ApplyResult.detail`` must contain the raw
+    gcloud stderr (not a generic 'Entry not found' string).  ALREADY_EXISTS
+    is the exception: it maps to ``status='skipped'``.
+    """
+
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="test-project",
+            catalog_project_id="test-project",
+            location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def _write_proposals(self, tmp_path) -> str:
+        import yaml
+        doc = {
+            "scan": {
+                "catalog": "my-catalog",
+                "namespace": "marketing",
+                "glossary": "marketing-glossary",
+                "glossary_location": "us-east1",
+                "glossary_project": "test-project",
+                "scanned_at": "2026-05-23T14:00:00Z",
+            },
+            "proposals": [{
+                "glossary_term": "impression",
+                "category": "Metrics",
+                "description": "Ad impression",
+                "table": "pixel_events",
+                "column": "event_type",
+                "match_score": 45,
+                "match_rationale": "exact:event_type",
+            }],
+        }
+        path = str(tmp_path / "proposals.yaml")
+        with open(path, "w") as fh:
+            yaml.dump(doc, fh, sort_keys=False)
+        return path
+
+    def test_error_detail_includes_gcloud_stderr(self, tmp_path):
+        from unittest.mock import patch
+        mgr = self._make_manager()
+        proposals_path = self._write_proposals(tmp_path)
+
+        gcloud_stderr = (
+            "ERROR: (gcloud.alpha.dataplex.entry-links.create) "
+            "Permission denied: dataplex.googleapis.com"
+        )
+
+        def fake_run(argv, **kwargs):
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": gcloud_stderr})()
+
+        with patch.object(mgr, "_run_gcloud", return_value={}):
+            with patch.object(mgr, "_resolve_project_number", return_value="test-project"):
+                with patch.object(mgr, "_resolve_glossary_inner_project", return_value="test-project"):
+                    with patch(
+                        "ingestion.related_entries.subprocess.run",
+                        side_effect=fake_run,
+                    ):
+                        results = mgr.apply_proposals(proposals_path, dry_run=False)
+
+        assert len(results) == 1
+        assert results[0].status == "error"
+        assert "dataplex.googleapis.com" in results[0].detail
+        assert "Permission denied" in results[0].detail
+
+    def test_already_exists_is_reported_as_skipped(self, tmp_path):
+        from unittest.mock import patch
+        mgr = self._make_manager()
+        proposals_path = self._write_proposals(tmp_path)
+
+        already_exists_stderr = (
+            "ERROR: (gcloud.alpha.dataplex.entry-links.create) "
+            "ALREADY_EXISTS: EntryLink already exists."
+        )
+
+        def fake_run(argv, **kwargs):
+            return type(
+                "R", (), {"returncode": 1, "stdout": "", "stderr": already_exists_stderr}
+            )()
+
+        with patch.object(mgr, "_run_gcloud", return_value={}):
+            with patch.object(mgr, "_resolve_project_number", return_value="test-project"):
+                with patch.object(mgr, "_resolve_glossary_inner_project", return_value="test-project"):
+                    with patch(
+                        "ingestion.related_entries.subprocess.run",
+                        side_effect=fake_run,
+                    ):
+                        results = mgr.apply_proposals(proposals_path, dry_run=False)
+
+        assert len(results) == 1
+        assert results[0].status == "skipped"
+        assert "already exists" in results[0].detail.lower()
+
+
+# ---------------------------------------------------------------------------
+# _iter_apply_rows: union of exact_matches + proposals in source order
+# ---------------------------------------------------------------------------
+
+class TestIterApplyRows:
+    def _doc(self, exact=None, fuzzy=None):
+        return {
+            "scan": {},
+            "exact_matches": exact or [],
+            "proposals": fuzzy or [],
+        }
+
+    def test_only_exact(self):
+        rows = list(RelatedEntriesManager._iter_apply_rows(self._doc(
+            exact=[{"glossary_term": "a", "table": "t", "column": "c"}],
+        )))
+        assert len(rows) == 1
+        assert rows[0]["glossary_term"] == "a"
+
+    def test_only_fuzzy(self):
+        rows = list(RelatedEntriesManager._iter_apply_rows(self._doc(
+            fuzzy=[{"glossary_term": "b", "table": "t", "column": "c"}],
+        )))
+        assert len(rows) == 1
+        assert rows[0]["glossary_term"] == "b"
+
+    def test_exact_before_fuzzy(self):
+        rows = list(RelatedEntriesManager._iter_apply_rows(self._doc(
+            exact=[{"glossary_term": "a", "table": "t", "column": "c"}],
+            fuzzy=[{"glossary_term": "b", "table": "t", "column": "c"}],
+        )))
+        assert [r["glossary_term"] for r in rows] == ["a", "b"]
+
+    def test_empty_doc(self):
+        rows = list(RelatedEntriesManager._iter_apply_rows(self._doc()))
+        assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# _resolve_glossary_inner_project
+# ---------------------------------------------------------------------------
+
+class TestResolveGlossaryInnerProject:
+    def _make_manager(self):
+        from ingestion.config import Config
+        config = Config(
+            data_project_id="outer-proj",
+            catalog_project_id="outer-proj",
+            location="us-east1",
+        )
+        return RelatedEntriesManager(config)
+
+    def test_reads_first_terms_parent(self):
+        """When the first term's parent uses a project number, the resolver
+        must return that number (since the API requires the project number
+        in entry-name references).  The intermediate ``gcloud projects
+        describe`` call is patched to return a deterministic number."""
+        from unittest.mock import patch
+        mgr = self._make_manager()
+        terms = [{
+            "name": "region",
+            "parent": "projects/wpp-dataproducts-lakehouse/locations/us-east1/glossaries/marketing-business-glossary/categories/geo",
+        }]
+        with patch.object(mgr, "_list_glossary_terms", return_value=terms):
+            with patch.object(
+                mgr, "_resolve_project_number",
+                side_effect=lambda pid: {"outer-proj": "111111", "wpp-dataproducts-lakehouse": "222222"}.get(pid, pid),
+            ):
+                assert mgr._resolve_glossary_inner_project("gloss") == "222222"
+
+    def test_falls_back_to_config_when_no_terms(self):
+        from unittest.mock import patch
+        mgr = self._make_manager()
+        with patch.object(mgr, "_list_glossary_terms", return_value=[]):
+            assert mgr._resolve_glossary_inner_project("gloss") == "outer-proj"
+
+    def test_falls_back_to_config_on_gcloud_failure(self):
+        from unittest.mock import patch
+        mgr = self._make_manager()
+        with patch.object(
+            mgr, "_list_glossary_terms",
+            side_effect=RuntimeError("permission denied"),
+        ):
+            assert mgr._resolve_glossary_inner_project("gloss") == "outer-proj"

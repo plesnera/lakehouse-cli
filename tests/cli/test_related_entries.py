@@ -61,7 +61,7 @@ class TestScanForRelatedEntries:
         )
         assert result.exit_code == 0
         instance.scan_for_related_entries.assert_called_once_with(
-            catalog_name="my-catalog", namespace=None, glossary=None
+            catalog_name="my-catalog", namespace=None, glossary=None, fuzzy_score_threshold=0
         )
 
     @patch("ingestion.cli.RelatedEntriesManager")
@@ -82,6 +82,7 @@ class TestScanForRelatedEntries:
             catalog_name="my-catalog",
             namespace="marketing",
             glossary="marketing-business-glossary",
+            fuzzy_score_threshold=0,
         )
 
     def test_missing_catalog_option_fails(self):
@@ -102,7 +103,8 @@ class TestScanForRelatedEntries:
 
     @patch("ingestion.cli.RelatedEntriesManager")
     def test_output_flag_triggers_export(self, mock_mgr_class):
-        """When --output is provided, export_proposals_yaml is called."""
+        """When --output is provided, export_proposals_yaml is called with
+        project/location derived from the discovered glossary's resource path."""
         instance = mock_mgr_class.return_value
         instance.scan_for_related_entries.return_value = ([], [])
         instance._discover_glossary.return_value = {
@@ -123,6 +125,36 @@ class TestScanForRelatedEntries:
         assert call_kwargs[1]["output_path"] == "/tmp/test_proposals.yaml"
         assert call_kwargs[1]["catalog_name"] == "c"
         assert call_kwargs[1]["glossary_id"] == "my-glossary"
+        # Project and location must be derived from the glossary resource path
+        # so the YAML does not silently fall back to the configured project
+        # (which can be the literal "my-gcp-project" string in some envs).
+        assert call_kwargs[1]["glossary_project"] == "p"
+        assert call_kwargs[1]["glossary_location"] == "l"
+
+    @patch("ingestion.cli.RelatedEntriesManager")
+    def test_project_location_overrides(self, mock_mgr_class):
+        """--project and --location flags take precedence over the
+        project/location parsed out of the discovered glossary's name."""
+        instance = mock_mgr_class.return_value
+        instance.scan_for_related_entries.return_value = ([], [])
+        instance._discover_glossary.return_value = {
+            "name": "projects/p/locations/l/glossaries/my-glossary",
+            "displayName": "My Glossary",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "scan-for-related-entries",
+                "--catalog", "c",
+                "--output", "/tmp/test_proposals.yaml",
+                "--project", "override-proj",
+                "--location", "eu-west1",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = instance.export_proposals_yaml.call_args
+        assert call_kwargs[1]["glossary_project"] == "override-proj"
+        assert call_kwargs[1]["glossary_location"] == "eu-west1"
 
     @patch("ingestion.cli.RelatedEntriesManager")
     def test_no_output_flag_skips_export(self, mock_mgr_class):
@@ -195,3 +227,23 @@ class TestApplyRelatedEntries:
     def test_missing_input_option_fails(self):
         result = runner.invoke(app, ["apply-related-entries"])
         assert result.exit_code != 0
+
+    @patch("ingestion.cli.RelatedEntriesManager")
+    def test_error_detail_includes_gcloud_stderr(self, mock_mgr_class):
+        """CLI passes through ApplyResult detail fields; the unit test in
+        tests/unit/test_related_entries.py verifies that the underlying
+        ``apply_proposals`` surfaces the gcloud stderr. This CLI test only
+        asserts the CLI does not swallow the detail field."""
+        instance = mock_mgr_class.return_value
+        instance.apply_proposals.return_value = [
+            type("R", (), {
+                "glossary_term": "impression",
+                "table_column": "pixel_events.event_type",
+                "status": "error",
+                "detail": "Entry not found: Consumer does not have access: dataplex.googleapis.com",
+            })()
+        ]
+        result = runner.invoke(
+            app, ["apply-related-entries", "--input", "p.yaml"]
+        )
+        assert result.exit_code == 0

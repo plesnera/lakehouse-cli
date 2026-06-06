@@ -13,8 +13,10 @@ Provides three workflows:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +54,8 @@ class RelatedEntry:
 class ExactMatch:
     """A term matched via exact or synonym column matching (Phase A)."""
     term_name: str
+    category: str
+    description: str
     matched_columns: List[str]  # List of original column names that matched
     found_in_tables: List[str]  # List of table names containing the matched columns
     # For synonym matches, via_synonym indicates the canonical term
@@ -96,6 +100,10 @@ def _extract_project_from_resource(resource: str) -> str:
     return m.group(1) if m else ""
 
 
+# ---------------------------------------------------------------------------
+# Dataplex resource name helpers
+# ---------------------------------------------------------------------------
+
 def _extract_entry_group_from_name(entry_name: str) -> str:
     """Extract the entry group segment (e.g. ``@bigquery``) from the full entry name."""
     m = re.search(r"/entryGroups/([^/]+)", entry_name)
@@ -106,6 +114,33 @@ def _extract_entry_id_from_name(entry_name: str) -> str:
     """Extract the entry ID segment (everything after ``/entries/``)."""
     m = re.search(r"/entries/(.+)$", entry_name)
     return m.group(1) if m else ""
+
+
+def _extract_namespace_and_table_from_entry_id(entry_id: str) -> tuple[str, str]:
+    """Extract (namespace, table) from a BigLake entry_id.
+    
+    Entry ID format:
+    - With namespace: biglake.googleapis.com/projects/{p}/locations/{l}/catalogs/{c}/namespaces/{ns}/tables/{t}
+    - Without namespace: biglake.googleapis.com/projects/{p}/locations/{l}/catalogs/{c}/tables/{t}
+    
+    Returns (namespace, table) tuple. Namespace is empty string if not present.
+    """
+    parts = entry_id.split("/")
+    # Find the position of "tables"
+    try:
+        tables_idx = parts.index("tables")
+        table_name = parts[tables_idx + 1] if tables_idx + 1 < len(parts) else ""
+        
+        # Check if there's a namespace before tables by looking for "namespaces" in the path
+        # The pattern is: .../catalogs/{catalog}/namespaces/{namespace}/tables/{table}
+        if tables_idx >= 2 and parts[tables_idx - 2] == "namespaces":
+            namespace = parts[tables_idx - 1]  # namespace is between "namespaces" and "tables"
+            return namespace, table_name
+        else:
+            return "", table_name
+    except (ValueError, IndexError):
+        # Fallback: try to get the last component as table
+        return "", entry_id.rsplit("/", 1)[-1]
 
 
 def extract_column_names_from_entry(entry: dict) -> List[str]:
@@ -224,6 +259,67 @@ class RelatedEntriesManager:
             f"--glossary={glossary_id}",
             f"--location={self.config.location}",
         ])
+
+    def _resolve_glossary_inner_project(self, glossary_id: str) -> str:
+        """Return the project segment embedded in a glossary term's entry-id.
+
+        Dataplex glossary-term entries live at::
+
+            projects/{outer_project}/locations/{location}
+            /entryGroups/@dataplex/entries/
+                projects/{inner_project}/locations/{location}
+                /glossaries/{glossary_id}/terms/{term_name}
+
+        Both ``outer_project`` and ``inner_project`` are the GCP project NUMBER
+        (not the project ID) — verified 2026-06-05 against the live API which
+        rejects ``wpp-dataproducts-lakehouse`` with: "Entry ID must contain
+        project number."
+
+        Resolution: read the first term's ``parent`` resource path (which uses
+        the project ID) and look up the corresponding project number via
+        ``gcloud projects describe``.  If the glossary has no terms yet (a
+        fresh glossary) or the lookup fails, fall back to
+        ``self.config.project_id`` so the apply still produces a plausible
+        path — the actual call will fail with a clearer error than silently
+        using a wrong project number.
+        """
+        try:
+            terms = self._list_glossary_terms(glossary_id)
+        except RuntimeError:
+            return self.config.project_id
+        if not terms:
+            return self.config.project_id
+        parent = terms[0].get("parent", "")
+        m = re.match(r"^projects/([^/]+)/", parent)
+        if not m:
+            return self.config.project_id
+        project_id = m.group(1)
+        return self._resolve_project_number(project_id)
+
+    def _resolve_project_number(self, project_id: str) -> str:
+        """Return the GCP project number for *project_id*, or *project_id* on failure.
+
+        Used to build the term entry's resource path (the API requires the
+        project number, not the project ID).  Cached per-instance to avoid
+        one subprocess per row in a multi-row apply.
+        """
+        if not hasattr(self, "_project_number_cache"):
+            self._project_number_cache: dict[str, str] = {}
+        if project_id in self._project_number_cache:
+            return self._project_number_cache[project_id]
+        try:
+            result = subprocess.run(
+                [
+                    "gcloud", "projects", "describe", project_id,
+                    "--format=value(projectNumber)",
+                ],
+                capture_output=True, text=True, check=True,
+            )
+            number = result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            number = project_id  # fall back; the call will fail with a clearer error
+        self._project_number_cache[project_id] = number
+        return number
 
     def _search_entries(self, query: str) -> List[dict]:
         """Search Dataplex catalog entries by keyword."""
@@ -381,10 +477,17 @@ class RelatedEntriesManager:
         catalog_name: str,
         namespace: Optional[str] = None,
         glossary: Optional[str] = None,
+        fuzzy_score_threshold: int = 0,
     ) -> Tuple[List[ExactMatch], List[FuzzyProposal]]:
         """Compare a BigLake catalog against a glossary to propose matches.
 
         Returns ``(exact_matches, fuzzy_proposals)`` and prints a report.
+        
+        Args:
+            catalog_name: BigLake catalog name to scan
+            namespace: Optional namespace filter within the catalog
+            glossary: Glossary ID or display name (default: first glossary found)
+            fuzzy_score_threshold: Filter out fuzzy proposals with a score below this threshold
         """
         # 1. Discover glossary and terms
         glossary_info = self._discover_glossary(glossary)
@@ -432,7 +535,10 @@ class RelatedEntriesManager:
             ]
 
         # 3. Extract schema from each table
-        table_schemas: dict[str, List[str]] = {}  # table_display_name -> [column_names]
+        # Use the actual table name and namespace from the entry_id as the key
+        # This ensures we can correctly reconstruct the entry path when applying
+        table_schemas: dict[str, List[str]] = {}  # fully_qualified_table -> [column_names]
+        table_info: dict[str, dict] = {}  # fully_qualified_table -> {namespace, table, display_name}
         total_columns = 0
         for e in table_entries:
             entry_name = e.get("name", "")
@@ -447,11 +553,28 @@ class RelatedEntriesManager:
             except RuntimeError:
                 continue
 
-            display = (full_entry.get("entrySource") or {}).get("displayName", "")
-            if not display:
-                display = entry_id.rsplit("/", 1)[-1]
+            # Extract namespace and table from the entry_id
+            ns, table_id = _extract_namespace_and_table_from_entry_id(entry_id)
+            
+            # Create a fully qualified identifier for this table
+            # Format: namespace/table or just table if no namespace
+            if ns:
+                fully_qualified_table = f"{ns}/{table_id}"
+            else:
+                fully_qualified_table = table_id
+            
+            # Store display name for reporting
+            display_name = (full_entry.get("entrySource") or {}).get("displayName", "")
+            if not display_name:
+                display_name = table_id
+            
+            table_info[fully_qualified_table] = {
+                "namespace": ns,
+                "table": table_id,
+                "display_name": display_name,
+            }
             columns = extract_column_names_from_entry(full_entry)
-            table_schemas[display] = columns
+            table_schemas[fully_qualified_table] = columns
             total_columns += len(columns)
 
         # 4. Phase A — Exact & synonym matching
@@ -460,6 +583,10 @@ class RelatedEntriesManager:
         # 5. Phase B — Fuzzy matching for unmatched terms
         unmatched = {k: v for k, v in term_lookup.items() if k not in matched_terms}
         fuzzy_proposals = self._phase_b_matching(unmatched, table_schemas)
+
+        # Apply fuzzy score threshold filter
+        if fuzzy_score_threshold > 0:
+            fuzzy_proposals = [p for p in fuzzy_proposals if p.score >= fuzzy_score_threshold]
 
         # 6. Print report
         self._print_scan_report(
@@ -517,6 +644,8 @@ class RelatedEntriesManager:
                 
                 m = ExactMatch(
                     term_name=info["displayName"],
+                    category=info["category"],
+                    description=info["description"],
                     matched_columns=matched_cols,
                     found_in_tables=tables,
                     table_column_pairs=table_column_pairs,
@@ -539,6 +668,8 @@ class RelatedEntriesManager:
                     canon = canonical_matches[canonical_norm]
                     m = ExactMatch(
                         term_name=info["displayName"],
+                        category=info["category"],
+                        description=info["description"],
                         matched_columns=canon.matched_columns,
                         found_in_tables=canon.found_in_tables,
                         via_synonym=synonym_target,
@@ -625,8 +756,8 @@ class RelatedEntriesManager:
             for table, col in pairs:
                 exact_list.append({
                     "glossary_term": m.term_name,
-                    "category": "",
-                    "description": "",
+                    "category": m.category,
+                    "description": m.description,
                     "table": table,
                     "column": col,
                     "match_type": "exact" if m.via_synonym is None else "synonym",
@@ -657,7 +788,12 @@ class RelatedEntriesManager:
         with open(output_path, "w", encoding="utf-8") as fh:
             yaml.dump(doc, fh, sort_keys=False, allow_unicode=True, default_flow_style=False)
 
-        print(f"\n📄 Proposals written to {output_path} ({len(exact_list)} exact matches, {len(proposals_list)} fuzzy proposals)")
+        written_project = scan_meta.get("glossary_project", "")
+        written_location = scan_meta.get("glossary_location", "")
+        print(
+            f"\n📄 Wrote {len(exact_list)} exact + {len(proposals_list)} fuzzy → {output_path}  "
+            f"(project={written_project}, location={written_location})"
+        )
 
     @staticmethod
     def load_proposals_yaml(input_path: str) -> dict:
@@ -679,10 +815,10 @@ class RelatedEntriesManager:
         if "scan" not in doc:
             raise ValueError("Missing required 'scan' section in proposals file")
         
-        # Validate proposals list (fuzzy matches)
-        if "proposals" not in doc or not isinstance(doc.get("proposals"), list):
-            raise ValueError("Missing or invalid 'proposals' list in proposals file")
-        
+        # Validate proposals list (fuzzy matches) — optional, defaults to []
+        if "proposals" in doc and not isinstance(doc["proposals"], list):
+            raise ValueError("Invalid 'proposals' list in proposals file")
+
         # Validate exact_matches list (optional for backward compatibility)
         if "exact_matches" in doc and not isinstance(doc["exact_matches"], list):
             raise ValueError("Invalid 'exact_matches' list in proposals file")
@@ -721,6 +857,18 @@ class RelatedEntriesManager:
 
         Returns a list of :class:`ApplyResult` describing what happened for
         each proposal row.
+
+        Per the [Dataplex glossary docs](https://cloud.google.com/dataplex/docs/manage-glossaries),
+        term-to-asset relations are Entry Links (not aspects) of link type
+        ``entryLinkTypes/definition``.  This method shells out to
+        ``gcloud alpha dataplex entry-links create`` for each row, with the
+        BigLake entry as ``SOURCE`` and the glossary-term entry as ``TARGET``,
+        and the link placed inside the ``@biglake`` entry-group (the SOURCE
+        entry's group, which the API requires for a ``definition`` link).
+
+        Idempotency: the gcloud call returns ``ALREADY_EXISTS`` if the link
+        already exists; we surface that as ``status="skipped"`` rather than
+        an error.
         """
         doc = self.load_proposals_yaml(input_path)
         scan_meta = doc["scan"]
@@ -733,6 +881,30 @@ class RelatedEntriesManager:
         catalog_name = scan_meta.get("catalog", "")
         namespace = scan_meta.get("namespace", "")
 
+        # Resolve the GCP project NUMBER (not the project ID) for the
+        # outer segment of the entry-link resource paths.  The Dataplex API
+        # requires the project number in entry-name references — verified
+        # 2026-06-05 against the live API, which rejects the project ID
+        # with: "Entry ID must contain project number."
+        #
+        # We resolve once per apply and use the same value for:
+        # - the outer segment of the BigLake entry-name
+        # - the outer and inner segments of the term entry-name
+        # - the pre-flight ``gcloud dataplex entries describe`` gcloud flag
+        # - the ``gcloud alpha dataplex entry-links create`` gcloud flag
+        # The cached lookup (per-instance dict) avoids a repeated
+        # ``gcloud projects describe`` call per row.
+        project_number = self._resolve_project_number(project)
+        # Inner-project for the term entry-id.  In the canonical setup the
+        # inner and outer project are the same; in cross-project setups they
+        # can differ.  Resolution requires listing terms, so we only do it
+        # for the live (non-dry-run) path; for dry-run we fall back to the
+        # resolved project number, which produces a plausible preview.
+        if dry_run:
+            inner_project = project_number
+        else:
+            inner_project = self._resolve_glossary_inner_project(glossary_id)
+
         total_entries = len(proposals) + len(exact_matches)
         print(f"Applying {total_entries} entries from {input_path} ({len(exact_matches)} exact matches, {len(proposals)} fuzzy proposals)...")
         print(f"Glossary: {glossary_id} ({location})")
@@ -742,27 +914,62 @@ class RelatedEntriesManager:
             print("\n--- DRY RUN (no changes will be made) ---")
 
         results: list[ApplyResult] = []
-        
-        # Process exact matches first
-        for p in exact_matches:
-            term = p["glossary_term"]
-            table = p["table"]
-            column = p["column"]
-            table_column = f"{table}.{column}"
 
-            # Construct the BiGLake entry name
-            entry_name = self._build_biglake_entry_name(
-                project=project,
+        # Helper to parse table field which may be in "namespace/table" format
+        def parse_table(table_str: str) -> tuple[str, str]:
+            """Parse table string into (namespace, table). If no namespace prefix, returns ('', table)."""
+            if "/" in table_str:
+                parts = table_str.split("/", 1)
+                return parts[0], parts[1]
+            return "", table_str
+
+        # The entry-link must live inside the SOURCE entry's group.  For our
+        # workflow the SOURCE is always a BigLake table, so the group is
+        # always @biglake (verified 2026-06-05 — @dataplex and any other
+        # group is rejected with: "EntryLink creation is not allowed in
+        # EntryGroup. … only EntryGroup([…/@biglake]) is allowed.").
+        link_entry_group = "@biglake"
+        # The entry-group that holds the materialized glossary-term entries.
+        # Used for the term-entry reference path; the term itself always
+        # lives in @dataplex on the project that owns the glossary.
+        term_entry_group = "@dataplex"
+
+        # Single loop over the union of exact matches + fuzzy proposals.
+        # Each row is processed identically regardless of source.
+        for row in self._iter_apply_rows(doc):
+            term = row["glossary_term"]
+            table_str = row["table"]
+            column = row["column"]
+
+            # Parse table which may contain namespace prefix
+            entry_namespace, table = parse_table(table_str)
+            table_column = f"{table_str}.{column}"
+
+            # Use the parsed namespace if present, otherwise fall back to scan metadata
+            effective_namespace = entry_namespace if entry_namespace else namespace
+
+            # Construct the BiGLake entry name (asset-side name; will be the
+            # SOURCE reference in the link).  The outer Dataplex path uses
+            # the project NUMBER (API requirement); the inner BigLake segment
+            # uses the project ID (BigLake convention).
+            biglake_entry_name = self._build_biglake_entry_name(
+                project=project_number,
                 location=location,
                 catalog_name=catalog_name,
-                namespace=namespace,
+                namespace=effective_namespace,
                 table=table,
+                inner_project=project,
             )
 
-            # Construct the glossary term entry name
+            # Construct the glossary term entry name (will be the TARGET
+            # reference in the link).  Both outer and inner segments use the
+            # project NUMBER — the API rejects the project ID with
+            # "Entry ID must contain project number.".
             term_entry_name = self._build_glossary_term_entry_name(
-                project=project,
+                outer_project=project_number,
                 location=location,
+                entry_group=term_entry_group,
+                inner_project=inner_project,
                 glossary_id=glossary_id,
                 term_name=term,
             )
@@ -772,162 +979,182 @@ class RelatedEntriesManager:
                     glossary_term=term,
                     table_column=table_column,
                     status="dry-run",
-                    detail=f"Would link {term_entry_name} → {entry_name} (column: {column})",
+                    detail=f"Would link {biglake_entry_name} ⇄ {term_entry_name} (column: {column})",
                 ))
                 continue
 
-            # Verify the entry exists
+            # Pre-flight: verify the BigLake entry exists.  Produces actionable
+            # errors for typos in the catalog/table/namespace fields of the
+            # proposals file.  We use the BigLake entry-id (no `locations/{l}`
+            # segment between `projects/{p}/` and `catalogs/{c}/` — verified
+            # against the real catalog on 2026-06-04).
             try:
+                if effective_namespace:
+                    entry_id = f"biglake.googleapis.com/projects/{project}/catalogs/{catalog_name}/namespaces/{effective_namespace}/tables/{table}"
+                else:
+                    entry_id = f"biglake.googleapis.com/projects/{project}/catalogs/{catalog_name}/tables/{table}"
                 self._run_gcloud([
                     "dataplex", "entries", "describe",
-                    f"biglake.googleapis.com/projects/{project}/catalogs/{catalog_name}/namespaces/{namespace}/tables/{table}",
+                    entry_id,
                     "--entry-group=@biglake",
                     f"--location={location}",
                     f"--project={project}",
                 ])
-            except RuntimeError:
-                results.append(ApplyResult(
-                    glossary_term=term,
-                    table_column=table_column,
-                    status="error",
-                    detail="Entry not found",
-                ))
-                continue
-
-            # Check for existing relation (idempotency)
-            existing = self._check_existing_relation(
-                project=project,
-                location=location,
-                glossary_id=glossary_id,
-                term_name=term,
-                entry_name=entry_name,
-            )
-            if existing:
-                results.append(ApplyResult(
-                    glossary_term=term,
-                    table_column=table_column,
-                    status="skipped",
-                    detail="Relation already exists",
-                ))
-                continue
-
-            # Create the related-entry link
-            try:
-                self._create_related_entry_link(
-                    project=project,
-                    location=location,
-                    glossary_id=glossary_id,
-                    term_name=term,
-                    target_entry=entry_name,
-                    column=column,
-                )
-                results.append(ApplyResult(
-                    glossary_term=term,
-                    table_column=table_column,
-                    status="created",
-                ))
             except RuntimeError as exc:
                 results.append(ApplyResult(
                     glossary_term=term,
                     table_column=table_column,
                     status="error",
-                    detail=str(exc),
-                ))
-
-        # Process fuzzy proposals
-        for p in proposals:
-            term = p["glossary_term"]
-            table = p["table"]
-            column = p["column"]
-            table_column = f"{table}.{column}"
-
-            # Construct the BiGLake entry name
-            entry_name = self._build_biglake_entry_name(
-                project=project,
-                location=location,
-                catalog_name=catalog_name,
-                namespace=namespace,
-                table=table,
-            )
-
-            # Construct the glossary term entry name
-            term_entry_name = self._build_glossary_term_entry_name(
-                project=project,
-                location=location,
-                glossary_id=glossary_id,
-                term_name=term,
-            )
-
-            if dry_run:
-                results.append(ApplyResult(
-                    glossary_term=term,
-                    table_column=table_column,
-                    status="dry-run",
-                    detail=f"Would link {term_entry_name} → {entry_name} (column: {column})",
+                    detail=f"Entry not found: {exc}",
                 ))
                 continue
 
-            # Verify the entry exists
-            try:
-                self._run_gcloud([
-                    "dataplex", "entries", "describe",
-                    f"biglake.googleapis.com/projects/{project}/catalogs/{catalog_name}/namespaces/{namespace}/tables/{table}",
-                    "--entry-group=@biglake",
-                    f"--location={location}",
-                    f"--project={project}",
-                ])
-            except RuntimeError:
-                results.append(ApplyResult(
-                    glossary_term=term,
-                    table_column=table_column,
-                    status="error",
-                    detail="Entry not found",
-                ))
-                continue
+            # Compute a deterministic, readable entry-link id.  Format:
+            #     "definition-{term_slug}-{ns}-{table_slug}"
+            # truncated to 63 chars (Dataplex resource-id limit).  An empty
+            # ``ns`` collapses to a double-hyphen so the id stays well-formed.
+            # Both the term and the table name are slugified (lowercase,
+            # spaces/underscores → hyphens) so the id only contains
+            # ``[a-z0-9-]`` which is what Dataplex resource ids accept.
+            def _slug(value: str) -> str:
+                return value.lower().replace(" ", "-").replace("_", "-")
+            term_slug = _slug(term)
+            ns_segment = effective_namespace or ""
+            table_slug = _slug(table)
+            entry_link_id = f"definition-{term_slug}-{ns_segment}-{table_slug}"[:63]
 
-            # Check for existing relation (idempotency)
-            existing = self._check_existing_relation(
+            # Create the definition entry-link via
+            # ``gcloud alpha dataplex entry-links create``.  The references
+            # file lists the BigLake entry first as SOURCE and the term entry
+            # second as TARGET — this is the order the API accepts (the
+            # reverse order was rejected with: "Entry `…/tables/audience` is
+            # invalid for the specified Entry Link Type" on 2026-06-05).
+            outcome, detail = self._create_entry_link(
                 project=project,
                 location=location,
-                glossary_id=glossary_id,
-                term_name=term,
-                entry_name=entry_name,
+                link_entry_group=link_entry_group,
+                entry_link_id=entry_link_id,
+                source_entry_ref=biglake_entry_name,
+                target_entry_ref=term_entry_name,
             )
-            if existing:
-                results.append(ApplyResult(
-                    glossary_term=term,
-                    table_column=table_column,
-                    status="skipped",
-                    detail="Relation already exists",
-                ))
-                continue
 
-            # Create the related-entry link
-            try:
-                self._create_related_entry_link(
-                    project=project,
-                    location=location,
-                    glossary_id=glossary_id,
-                    term_name=term,
-                    target_entry=entry_name,
-                    column=column,
-                )
+            if outcome == "created":
                 results.append(ApplyResult(
                     glossary_term=term,
                     table_column=table_column,
                     status="created",
                 ))
-            except RuntimeError as exc:
+            elif outcome == "skipped":
+                results.append(ApplyResult(
+                    glossary_term=term,
+                    table_column=table_column,
+                    status="skipped",
+                    detail=detail or "Relation already exists",
+                ))
+            else:  # "error"
                 results.append(ApplyResult(
                     glossary_term=term,
                     table_column=table_column,
                     status="error",
-                    detail=str(exc),
+                    detail=detail,
                 ))
 
         # Print summary
         self._print_apply_report(results, dry_run=dry_run)
         return results
+
+    def _create_entry_link(
+        self,
+        *,
+        project: str,
+        location: str,
+        link_entry_group: str,
+        entry_link_id: str,
+        source_entry_ref: str,
+        target_entry_ref: str,
+    ) -> tuple[str, str]:
+        """Create a Dataplex definition entry-link via the gcloud CLI.
+
+        Returns a tuple ``(outcome, detail)`` where ``outcome`` is one of:
+          - ``"created"`` — link was newly created
+          - ``"skipped"`` — link already exists (ALREADY_EXISTS)
+          - ``"error"``   — anything else; ``detail`` carries the gcloud stderr
+
+        The references file is written to a tempfile (the gcloud subcommand
+        only accepts file paths, not inline JSON) and removed in a finally
+        block so we don't litter the user's filesystem.
+
+        Mirrors the entry-link creation pattern documented at
+        https://cloud.google.com/dataplex/docs/manage-glossaries — verified
+        end-to-end against a real glossary on 2026-06-05.
+        """
+        # gcloud's --entry-references flag takes a path to a YAML/JSON file
+        # with this shape (verified by `gcloud alpha dataplex entry-links
+        # create --help`, example section).
+        references_doc = [
+            {"name": source_entry_ref, "type": "SOURCE"},
+            {"name": target_entry_ref, "type": "TARGET"},
+        ]
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", prefix="entry-refs-", delete=False
+        )
+        refs_path = tmp.name
+        try:
+            yaml.dump(references_doc, tmp, sort_keys=False)
+            tmp.close()
+            result = subprocess.run(
+                [
+                    "gcloud", "alpha", "dataplex", "entry-links", "create",
+                    entry_link_id,
+                    f"--entry-group={link_entry_group}",
+                    f"--location={location}",
+                    f"--project={project}",
+                    "--entry-link-type=projects/dataplex-types/locations/global/entryLinkTypes/definition",
+                    f"--entry-references={refs_path}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        finally:
+            try:
+                os.unlink(refs_path)
+            except OSError:
+                pass
+
+        if result.returncode == 0:
+            return "created", ""
+
+        stderr = result.stderr.strip()
+        # ALREADY_EXISTS is the idempotent re-apply case — surface as
+        # 'skipped' rather than 'error' so the apply report can show a
+        # friendly "Relation already exists" message.
+        if "ALREADY_EXISTS" in stderr or "already exists" in stderr.lower():
+            return "skipped", "Relation already exists"
+        return "error", stderr or f"gcloud exited with rc={result.returncode}"
+
+    @staticmethod
+    def _iter_apply_rows(doc: dict):
+        """Yield apply rows for a parsed proposals YAML document.
+
+        Yields one row dict per ``(glossary_term, table, column)`` triple,
+        walking the ``exact_matches`` list first and then ``proposals``.
+        This keeps the apply loop source-agnostic: every row is processed
+        identically regardless of whether it was auto-detected as an exact
+        match or proposed as a fuzzy semantic match.
+        """
+        for m in doc.get("exact_matches", []):
+            yield {
+                "glossary_term": m["glossary_term"],
+                "table": m["table"],
+                "column": m["column"],
+            }
+        for p in doc.get("proposals", []):
+            yield {
+                "glossary_term": p["glossary_term"],
+                "table": p["table"],
+                "column": p["column"],
+            }
 
     # ------------------------------------------------------------------
     # apply helpers
@@ -940,87 +1167,81 @@ class RelatedEntriesManager:
         catalog_name: str,
         namespace: str,
         table: str,
+        inner_project: Optional[str] = None,
     ) -> str:
-        """Construct the full Dataplex entry name for a BigLake table."""
+        """Construct the full Dataplex entry name for a BigLake table.
+
+        The BigLake entry path used both for `gcloud dataplex entries describe`
+        and as the value written into a glossary term's `relatedEntries` aspect
+        is shaped:
+
+            projects/{project}/locations/{location}/entryGroups/@biglake/entries/
+                biglake.googleapis.com/projects/{inner_project}/catalogs/{catalog_name}/namespaces/{namespace}/tables/{table}
+
+        The outer ``projects/{project}`` segment uses the GCP project NUMBER
+        (verified 2026-06-05 against the live API which rejects the project
+        ID with "Entry ID must contain project number.").  The inner
+        ``biglake.googleapis.com/projects/{inner_project}`` segment uses the
+        project ID (BigLake convention).  When *inner_project* is omitted,
+        it falls back to *project* for backwards compatibility with callers
+        that don't distinguish the two — useful for tests and for projects
+        whose number equals their ID.
+
+        Note that the inner `biglake.googleapis.com/...` segment does NOT
+        include `locations/{l}` — verified against the live `gcloud dataplex
+        entries list` output on 2026-06-04. The location only appears in the
+        outer Dataplex entry-group path.
+        """
+        # Handle empty namespace
+        if namespace:
+            ns_path = f"/namespaces/{namespace}"
+        else:
+            ns_path = ""
+        ip = inner_project if inner_project is not None else project
         return (
             f"projects/{project}/locations/{location}"
             f"/entryGroups/@biglake/entries/"
-            f"biglake.googleapis.com/projects/{project}"
-            f"/catalogs/{catalog_name}/namespaces/{namespace}/tables/{table}"
+            f"biglake.googleapis.com/projects/{ip}"
+            f"/catalogs/{catalog_name}{ns_path}/tables/{table}"
         )
 
     @staticmethod
     def _build_glossary_term_entry_name(
-        project: str,
+        *,
+        outer_project: str,
         location: str,
+        entry_group: str,
+        inner_project: str,
         glossary_id: str,
         term_name: str,
     ) -> str:
-        """Construct the full Dataplex entry name for a glossary term."""
+        """Construct the full Dataplex entry resource name for a glossary term.
+
+        Returns the full path shaped::
+
+            projects/{outer_project}/locations/{location}
+            /entryGroups/{entry_group}/entries/
+                projects/{inner_project}/locations/{location}
+                /glossaries/{glossary_id}/terms/{term_name}
+
+        The ``outer_project`` is the catalog project that owns the entry-group
+        (typically ``config.project_id``).  The ``inner_project`` is the
+        project segment that lives *inside* the entry-id — derived from the
+        first term's parent resource path via
+        :meth:`_resolve_glossary_inner_project`.  In the canonical setup the
+        two project segments are the same; in cross-project setups they can
+        differ.
+
+        ``entry_group`` defaults to ``@dataplex`` — the canonical system group
+        per the Dataplex glossary docs.
+        """
         slug = term_name.lower().replace(" ", "-").replace("_", "-")
         return (
-            f"projects/{project}/locations/{location}"
-            f"/entryGroups/@glossary/entries/"
-            f"glossary.googleapis.com/projects/{project}"
-            f"/locations/{location}/glossaries/{glossary_id}/terms/{slug}"
+            f"projects/{outer_project}/locations/{location}"
+            f"/entryGroups/{entry_group}/entries/"
+            f"projects/{inner_project}/locations/{location}"
+            f"/glossaries/{glossary_id}/terms/{slug}"
         )
-
-    def _check_existing_relation(
-        self,
-        project: str,
-        location: str,
-        glossary_id: str,
-        term_name: str,
-        entry_name: str,
-    ) -> bool:
-        """Return True if a related-entry link already exists for this term+entry."""
-        slug = term_name.lower().replace(" ", "-").replace("_", "-")
-        term_entry_id = (
-            f"glossary.googleapis.com/projects/{project}"
-            f"/locations/{location}/glossaries/{glossary_id}/terms/{slug}"
-        )
-        try:
-            entry = self._run_gcloud([
-                "dataplex", "entries", "describe", term_entry_id,
-                "--entry-group=@glossary",
-                f"--location={location}",
-                f"--project={project}",
-                "--view=FULL",
-            ])
-            # Check if any aspect already references our target entry
-            for _key, aspect in (entry.get("aspects") or {}).items():
-                data = aspect.get("data") or {}
-                for rel in data.get("relatedEntries", []):
-                    if rel.get("entry", "") == entry_name:
-                        return True
-        except RuntimeError:
-            pass
-        return False
-
-    def _create_related_entry_link(
-        self,
-        project: str,
-        location: str,
-        glossary_id: str,
-        term_name: str,
-        target_entry: str,
-        column: str,
-    ) -> None:
-        """Create a related-entry link from a glossary term to a catalog entry."""
-        slug = term_name.lower().replace(" ", "-").replace("_", "-")
-        term_entry_id = (
-            f"glossary.googleapis.com/projects/{project}"
-            f"/locations/{location}/glossaries/{glossary_id}/terms/{slug}"
-        )
-        # Use gcloud dataplex entries update to add the relation aspect
-        self._run_gcloud([
-            "dataplex", "entries", "update", term_entry_id,
-            "--entry-group=@glossary",
-            f"--location={location}",
-            f"--project={project}",
-            f"--aspects={{'{project}.relatedEntries': {{'relatedEntries': [{{'entry': '{target_entry}', 'relationType': 'HAS_COLUMN', 'field': '{column}'}}]}}}}",
-            f"--aspect-keys={project}.relatedEntries",
-        ])
 
     @staticmethod
     def _print_apply_report(results: List[ApplyResult], dry_run: bool = False) -> None:
@@ -1074,12 +1295,13 @@ class RelatedEntriesManager:
         # Phase A
         print(f"\nPhase A — Exact & Synonym Matches ({len(exact_matches)} terms):")
         if exact_matches:
-            print(f"  {'Glossary Term':<25} | {'Matched Column(s)':<30} | Found In Table(s)")
-            print("  " + "-" * 100)
+            print(f"  {'Glossary Term':<25} | {'Category':<20} | {'Matched Column(s)':<30} | {'Type':<10} | Found In Table(s)")
+            print("  " + "-" * 135)
             for m in exact_matches:
                 cols = ", ".join(m.matched_columns)
                 tables = ", ".join(m.found_in_tables)
-                print(f"  {m.term_name:<25} | {cols:<30} | {tables}")
+                match_type = "synonym" if m.via_synonym else "exact"
+                print(f"  {m.term_name:<25} | {m.category:<20} | {cols:<30} | {match_type:<10} | {tables}")
         else:
             print("  (no exact matches)")
 

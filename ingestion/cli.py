@@ -479,6 +479,9 @@ def scan_for_related_entries(
     namespace: str = typer.Option(None, "--namespace", help="Optional namespace filter within the catalog"),
     glossary: str = typer.Option(None, "--glossary", help="Glossary ID or display name (default: first glossary found)"),
     output: str = typer.Option(None, "--output", "-o", help="Write proposals to a YAML file for curation and later apply"),
+    fuzzy_score_threshold: int = typer.Option(0, "--fuzzy-score-threshold", help="Filter out fuzzy proposals with a score below this threshold"),
+    project: str = typer.Option(None, "--project", help="Override the Google Cloud project (default: derived from glossary resource path)"),
+    location: str = typer.Option(None, "--location", help="Override the location (default: derived from glossary resource path)"),
 ):
     """Compare a BigLake catalog against a glossary to find matching and unmatched terms.
 
@@ -512,18 +515,31 @@ def scan_for_related_entries(
         uv run python -m ingestion.cli scan-for-related-entries \\
           --catalog wpp-dataproducts-lakehouse-warehouse \\
           --namespace marketing \\
-          --output proposals.yaml
+          --output proposals.yaml \\
+          --fuzzy-score-threshold 10
     """
     config = Config()
     mgr = RelatedEntriesManager(config)
     exact, fuzzy = mgr.scan_for_related_entries(
-        catalog_name=catalog, namespace=namespace, glossary=glossary
+        catalog_name=catalog, namespace=namespace, glossary=glossary, fuzzy_score_threshold=fuzzy_score_threshold
     )
 
     if output:
-        # Resolve glossary ID for the export metadata
+        # Resolve glossary ID for the export metadata, and pull the
+        # project/location out of the glossary resource path so the YAML
+        # is self-describing (avoids writing a silent fallback like
+        # "my-gcp-project" into the file).
         glossary_info = mgr._discover_glossary(glossary)
-        glossary_id = glossary_info["name"].rsplit("/", 1)[-1]
+        glossary_name = glossary_info["name"]
+        parts = glossary_name.split("/")
+        # name is shaped: projects/{p}/locations/{l}/glossaries/{id}
+        discovered_project = parts[1] if len(parts) > 1 and parts[0] == "projects" else None
+        discovered_location = parts[3] if len(parts) > 3 and parts[2] == "locations" else None
+
+        glossary_id = glossary_name.rsplit("/", 1)[-1]
+        glossary_project = project or discovered_project or config.project_id
+        glossary_location = location or discovered_location or config.location
+
         mgr.export_proposals_yaml(
             exact_matches=exact,
             fuzzy_proposals=fuzzy,
@@ -531,6 +547,8 @@ def scan_for_related_entries(
             catalog_name=catalog,
             namespace=namespace,
             glossary_id=glossary_id,
+            glossary_project=glossary_project,
+            glossary_location=glossary_location,
         )
 
 
@@ -545,10 +563,18 @@ def apply_related_entries(
     """Apply curated related-entry proposals from a YAML file.
 
     Reads a proposals file (produced by ``scan-for-related-entries --output``),
-    validates each proposal, and creates related-entry links in Dataplex Catalog.
+    validates each proposal, and creates related-entry links in Dataplex
+    Catalog via ``gcloud alpha dataplex entry-links create`` (link type
+    ``entryLinkTypes/definition``). Each link connects a glossary-term entry
+    to a BigLake table entry.
 
-    The command is idempotent: existing relations are skipped with an
-    informational message rather than duplicated.
+    The link is always created in the ``@biglake`` entry-group (the SOURCE
+    entry's group, which the API requires for a ``definition`` link), and
+    the references are ordered BigLake-SOURCE first, term-TARGET second.
+
+    The command is idempotent: existing relations (gcloud returns
+    ``ALREADY_EXISTS``) are skipped with an informational message rather
+    than duplicated.
 
     Examples:
         # Preview changes
