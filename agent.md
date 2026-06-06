@@ -164,7 +164,10 @@ Config resolution order (ingestion/config.py)
 1. Explicit CLI flags (--data-project, --catalog-project, etc.)
 2. gcloud config get-value project  (subprocess, 5s timeout)
 3. GOOGLE_CLOUD_PROJECT env var
-4. Literal fallback "my-gcp-project" (not intended for production)
+4. If none of the above yields a project, `Config.get_current_gcloud_project`
+   returns `None` and the field validation in pydantic raises — there is no
+   silent literal fallback. Set GOOGLE_CLOUD_PROJECT or run
+   `gcloud config set project` before invoking the CLI.
 
 Required external state
 -------------------------

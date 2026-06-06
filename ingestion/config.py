@@ -1,13 +1,18 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import subprocess
 import os
 
 
 class Config(BaseModel):
     @staticmethod
-    def get_current_gcloud_project() -> str:
-        """Get the current gcloud project or return None if not available."""
+    def get_current_gcloud_project() -> Optional[str]:
+        """Return the current gcloud project, or None if it cannot be determined.
+
+        Returning None (instead of a silent literal like "my-gcp-project") lets
+        downstream callers fail loudly when neither `gcloud config get-value
+        project` nor $GOOGLE_CLOUD_PROJECT yields a real project ID.
+        """
         try:
             # Try gcloud command first
             result = subprocess.run(
@@ -21,8 +26,9 @@ class Config(BaseModel):
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             pass
 
-        # Fallback to environment variable
-        return os.environ.get("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
+        # Fallback to environment variable; return None when unset so callers
+        # raise a clear error rather than writing a bogus project ID.
+        return os.environ.get("GOOGLE_CLOUD_PROJECT") or None
 
     # Project configuration - supports cross-project scenarios
     data_project_id: str = Field(
