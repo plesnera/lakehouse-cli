@@ -165,10 +165,28 @@ def _extract_synonym_target(description: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _singularize(word: str) -> str:
+    """Lightweight singularization for common English nouns."""
+    if len(word) <= 3:
+        return word
+    if word.endswith('ies') and len(word) > 4:
+        return word[:-3] + 'y'
+    if word.endswith('es') and word[-3] in ['s', 'x', 'z', 'c', 'h']:
+        return word[:-2]
+    if word.endswith('s') and not word.endswith('ss') and not word.endswith('us'):
+        return word[:-1]
+    return word
+
+
+def _singularize_identifier(name: str) -> str:
+    """Singularize components of an underscore-separated identifier."""
+    return "_".join(_singularize(part) for part in name.split("_"))
+
+
 def tokenize_description(description: str) -> List[str]:
-    """Tokenize a term description into keywords, filtering stop words."""
+    """Tokenize a term description into keywords, filtering stop words and singularizing."""
     words = re.findall(r"[a-z][a-z0-9_]*", description.lower())
-    return [w for w in words if w not in STOP_WORDS and len(w) > 1]
+    return [_singularize(w) for w in words if w not in STOP_WORDS and len(w) > 1]
 
 
 def score_column(column_name: str, table_name: str, keywords: List[str]) -> Tuple[int, List[str]]:
@@ -183,8 +201,9 @@ def score_column(column_name: str, table_name: str, keywords: List[str]) -> Tupl
     """
     score = 0
     matched: list[str] = []
-    col_lower = column_name.lower()
-    tbl_lower = table_name.lower()
+
+    col_lower = _singularize_identifier(column_name.lower())
+    tbl_lower = _singularize_identifier(table_name.lower())
 
     for kw in keywords:
         if kw == col_lower:
