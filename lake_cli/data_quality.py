@@ -8,8 +8,8 @@ Ref: https://docs.cloud.google.com/dataplex/docs/data-quality-overview
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
-from ingestion.config import Config, TABLES
-from ingestion.table_metadata import METADATA_DIR, load_all_table_metadata, RuleMeta
+from lake_cli.config import Config, TABLES
+from lake_cli.table_metadata import METADATA_DIR, load_all_table_metadata, RuleMeta
 
 
 def _rule_from_meta(meta: RuleMeta) -> dataplex_v1.DataQualityRule:

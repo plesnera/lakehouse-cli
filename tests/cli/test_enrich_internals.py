@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from ingestion.table_and_column_insights import HybridMetadataEnricher
+from lake_cli.table_and_column_insights import HybridMetadataEnricher
 
 
 FIXTURES_METADATA = os.path.join(os.path.dirname(__file__), "..", "fixtures", "metadata")
@@ -25,7 +25,7 @@ def _make_enricher(metadata_dir: str | None = None) -> HybridMetadataEnricher:
     config.project_id = "test-project"
     config.iceberg_namespace = "marketing"
 
-    with patch("ingestion.table_and_column_insights.bigquery.Client"):
+    with patch("lake_cli.table_and_column_insights.bigquery.Client"):
         enricher = HybridMetadataEnricher(config)
 
     if metadata_dir is not None:

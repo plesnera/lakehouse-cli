@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ingestion.lakehouse_catalog import LakehouseCatalogManager
-from ingestion.config import Config
+from lake_cli.lakehouse_catalog import LakehouseCatalogManager
+from lake_cli.config import Config
 
 
 class TestLakehouseCatalogManager:

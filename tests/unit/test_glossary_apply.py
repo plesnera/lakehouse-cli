@@ -8,16 +8,16 @@ import pytest
 import yaml
 from pathlib import Path
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 class TestBuildDataplexBqEntryName:
     """_build_dataplex_bq_entry_name() constructs the native @dataplex entry path."""
 
-    @patch("ingestion.glossary_manager.dataplex_v1")
-    @patch("ingestion.glossary_manager.BusinessGlossaryManager._get_project_number", return_value="123456789")
+    @patch("lake_cli.glossary_manager.dataplex_v1")
+    @patch("lake_cli.glossary_manager.BusinessGlossaryManager._get_project_number", return_value="123456789")
     def test_returns_dataplex_entry_group_path(self, _mock_proj_num, _mock_dataplex):
-        from ingestion.glossary_manager import BusinessGlossaryManager
+        from lake_cli.glossary_manager import BusinessGlossaryManager
 
         config = Config(
             catalog_project_id="my-project",
@@ -35,10 +35,10 @@ class TestBuildDataplexBqEntryName:
             "bigquery.googleapis.com/projects/my-project/datasets/marketing/tables/audience"
         )
 
-    @patch("ingestion.glossary_manager.dataplex_v1")
-    @patch("ingestion.glossary_manager.BusinessGlossaryManager._get_project_number", return_value="123456789")
+    @patch("lake_cli.glossary_manager.dataplex_v1")
+    @patch("lake_cli.glossary_manager.BusinessGlossaryManager._get_project_number", return_value="123456789")
     def test_does_not_reference_custom_entry_group(self, _mock_proj_num, _mock_dataplex):
-        from ingestion.glossary_manager import BusinessGlossaryManager
+        from lake_cli.glossary_manager import BusinessGlossaryManager
 
         config = Config(
             catalog_project_id="my-project",
@@ -62,13 +62,13 @@ class TestApplyGlossaryToAssetsEntryPath:
         path.write_text(yaml.dump(data, sort_keys=False, allow_unicode=True))
         return str(path)
 
-    @patch("ingestion.glossary_manager.BusinessGlossaryManager._get_project_number", return_value="123456789")
-    @patch("ingestion.glossary_manager.BusinessGlossaryManager._ensure_glossary_aspect_type")
-    @patch("ingestion.glossary_manager.dataplex_v1")
+    @patch("lake_cli.glossary_manager.BusinessGlossaryManager._get_project_number", return_value="123456789")
+    @patch("lake_cli.glossary_manager.BusinessGlossaryManager._ensure_glossary_aspect_type")
+    @patch("lake_cli.glossary_manager.dataplex_v1")
     def test_entry_path_uses_dataplex_entry_group(
         self, mock_dataplex, mock_ensure_aspect, _mock_proj_num, tmp_path
     ):
-        from ingestion.glossary_manager import BusinessGlossaryManager
+        from lake_cli.glossary_manager import BusinessGlossaryManager
 
         config = Config(
             catalog_project_id="my-project",

@@ -10,7 +10,7 @@ from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
 import time
 
-from ingestion.config import Config, TABLES
+from lake_cli.config import Config, TABLES
 
 
 class DataProfilingManager:

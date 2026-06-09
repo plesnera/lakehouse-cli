@@ -503,9 +503,9 @@ wheels = [
 ]
 
 [[package]]
-name = "lakehouse-content"
+name = "lake-cli"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "google-api-core" },
     { name = "google-auth" },

@@ -8,7 +8,7 @@ Ref: https://cloud.google.com/bigquery/docs/continuous-queries
 
 from google.cloud import bigquery
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 class ContinuousQueryManager:

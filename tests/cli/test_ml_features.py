@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from ingestion.cli import app
+from lake_cli.cli import app
 
 
 runner = CliRunner()
@@ -16,14 +16,14 @@ runner = CliRunner()
 class TestVectorSearchCommand:
     """vector-search CLI command."""
 
-    @patch("ingestion.cli.VectorSearchManager")
+    @patch("lake_cli.cli.VectorSearchManager")
     def test_calls_setup(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         result = runner.invoke(app, ["vector-search"])
         assert result.exit_code == 0
         instance.setup.assert_called_once_with(dry_run=False)
 
-    @patch("ingestion.cli.VectorSearchManager")
+    @patch("lake_cli.cli.VectorSearchManager")
     def test_dry_run_passed(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         result = runner.invoke(app, ["vector-search", "--dry-run"])
@@ -34,14 +34,14 @@ class TestVectorSearchCommand:
 class TestBqmlSetupCommand:
     """bqml-setup CLI command."""
 
-    @patch("ingestion.cli.BQMLGeminiManager")
+    @patch("lake_cli.cli.BQMLGeminiManager")
     def test_calls_setup(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         result = runner.invoke(app, ["bqml-setup"])
         assert result.exit_code == 0
         instance.setup.assert_called_once_with(dry_run=False)
 
-    @patch("ingestion.cli.BQMLGeminiManager")
+    @patch("lake_cli.cli.BQMLGeminiManager")
     def test_dry_run_passed(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         result = runner.invoke(app, ["bqml-setup", "--dry-run"])
@@ -52,14 +52,14 @@ class TestBqmlSetupCommand:
 class TestContinuousQueriesCommand:
     """continuous-queries CLI command."""
 
-    @patch("ingestion.cli.ContinuousQueryManager")
+    @patch("lake_cli.cli.ContinuousQueryManager")
     def test_default_dry_run_true(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         result = runner.invoke(app, ["continuous-queries"])
         assert result.exit_code == 0
         instance.setup.assert_called_once_with(dry_run=True)
 
-    @patch("ingestion.cli.ContinuousQueryManager")
+    @patch("lake_cli.cli.ContinuousQueryManager")
     def test_continuous_queries_defaults_to_dry_run(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         result = runner.invoke(app, ["continuous-queries"])

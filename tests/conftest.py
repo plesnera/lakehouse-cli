@@ -14,7 +14,7 @@ import pytest
 # Ensure the project root is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 # ---------------------------------------------------------------------------
@@ -102,5 +102,5 @@ def frozen_time():
 def cli_runner():
     """A typer.testing.CliRunner for invoking the CLI."""
     from typer.testing import CliRunner
-    from ingestion.cli import app
+    from lake_cli.cli import app
     return CliRunner()

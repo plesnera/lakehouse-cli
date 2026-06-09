@@ -1,11 +1,11 @@
 """Legacy glossary writer — delegates to BusinessGlossaryManager.
 
 Retained for backward-compatibility with the ``catalog()`` CLI command.
-New code should use ``ingestion.glossary_manager.BusinessGlossaryManager`` directly.
+New code should use ``lake_cli.glossary_manager.BusinessGlossaryManager`` directly.
 """
 
-from ingestion.config import Config
-from ingestion.glossary_manager import BusinessGlossaryManager
+from lake_cli.config import Config
+from lake_cli.glossary_manager import BusinessGlossaryManager
 
 
 class GlossaryWriter:

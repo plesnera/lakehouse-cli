@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from ingestion.cli import app
+from lake_cli.cli import app
 
 
 runner = CliRunner()
@@ -16,7 +16,7 @@ runner = CliRunner()
 class TestCatalogCommand:
     """catalog CLI command — registers Iceberg tables in BigQuery and Dataplex."""
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_calls_run_catalog_with_default_config(self, mock_run_catalog):
         result = runner.invoke(app, ["catalog"])
         assert result.exit_code == 0
@@ -26,7 +26,7 @@ class TestCatalogCommand:
         assert call_config.data_project_id is not None
         assert call_config.catalog_project_id is not None
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_overrides_data_project(self, mock_run_catalog):
         result = runner.invoke(
             app, ["catalog", "--data-project", "my-data-project"]
@@ -35,7 +35,7 @@ class TestCatalogCommand:
         call_config = mock_run_catalog.call_args[0][0]
         assert call_config.data_project_id == "my-data-project"
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_overrides_catalog_project(self, mock_run_catalog):
         result = runner.invoke(
             app, ["catalog", "--catalog-project", "my-catalog-project"]
@@ -44,7 +44,7 @@ class TestCatalogCommand:
         call_config = mock_run_catalog.call_args[0][0]
         assert call_config.catalog_project_id == "my-catalog-project"
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_overrides_iceberg_warehouse(self, mock_run_catalog):
         result = runner.invoke(
             app, ["catalog", "--iceberg-warehouse", "gs://my-bucket/iceberg"]
@@ -53,7 +53,7 @@ class TestCatalogCommand:
         call_config = mock_run_catalog.call_args[0][0]
         assert call_config.iceberg_warehouse == "gs://my-bucket/iceberg"
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_overrides_biglake_connection(self, mock_run_catalog):
         result = runner.invoke(
             app,
@@ -67,7 +67,7 @@ class TestCatalogCommand:
         call_config = mock_run_catalog.call_args[0][0]
         assert call_config.biglake_connection == "projects/p/locations/l/connections/c"
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_all_overrides_together(self, mock_run_catalog):
         result = runner.invoke(
             app,
@@ -86,7 +86,7 @@ class TestCatalogCommand:
         assert call_config.iceberg_warehouse == "gs://b/iceberg"
         assert call_config.biglake_connection == "projects/p/locations/l/connections/c"
 
-    @patch("ingestion.cli._run_catalog")
+    @patch("lake_cli.cli._run_catalog")
     def test_overrides_catalog_name(self, mock_run_catalog):
         result = runner.invoke(
             app, ["catalog", "--catalog-name", "my-catalog"]
@@ -99,19 +99,19 @@ class TestCatalogCommand:
 class TestRunCatalogLogic:
     """_run_catalog internal logic — validation and early exits."""
 
-    @patch("ingestion.cli.LakehouseCatalogManager")
+    @patch("lake_cli.cli.LakehouseCatalogManager")
     def test_bails_when_catalog_name_empty(self, mock_lakehouse_class):
-        from ingestion.cli import _run_catalog
-        from ingestion.config import Config
+        from lake_cli.cli import _run_catalog
+        from lake_cli.config import Config
 
         config = Config(lakehouse_catalog_name="")
         _run_catalog(config)
         mock_lakehouse_class.assert_not_called()
 
-    @patch("ingestion.cli.LakehouseCatalogManager")
+    @patch("lake_cli.cli.LakehouseCatalogManager")
     def test_bails_when_catalog_does_not_exist(self, mock_lakehouse_class):
-        from ingestion.cli import _run_catalog
-        from ingestion.config import Config
+        from lake_cli.cli import _run_catalog
+        from lake_cli.config import Config
 
         lakehouse_instance = mock_lakehouse_class.return_value
         lakehouse_instance.ensure_catalog.return_value = {"catalog_exists": False}
@@ -121,10 +121,10 @@ class TestRunCatalogLogic:
 
         lakehouse_instance.ensure_namespace.assert_not_called()
 
-    @patch("ingestion.cli.LakehouseCatalogManager")
+    @patch("lake_cli.cli.LakehouseCatalogManager")
     def test_runs_full_pipeline_when_catalog_exists(self, mock_lakehouse_class):
-        from ingestion.cli import _run_catalog
-        from ingestion.config import Config
+        from lake_cli.cli import _run_catalog
+        from lake_cli.config import Config
 
         lakehouse_instance = mock_lakehouse_class.return_value
         lakehouse_instance.ensure_catalog.return_value = {"catalog_exists": True}

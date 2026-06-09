@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from google.cloud import bigquery
 from google.cloud import dataplex_v1
 from google.api_core.exceptions import NotFound, GoogleAPICallError
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 

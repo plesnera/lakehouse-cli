@@ -5,8 +5,8 @@ This file is a living reference for AI agents (and human maintainers) working on
 the lakehouse-cli codebase.  It captures architectural intent, sharp edges, and
 maintenance rules that are not obvious from the code alone.
 
-If you are reading this, you are probably about to modify ingestion/cli.py,
-ingestion/table_and_column_insights.py, or ingestion/glossary_manager.py.
+If you are reading this, you are probably about to modify lake_cli/cli.py,
+lake_cli/table_and_column_insights.py, or lake_cli/glossary_manager.py.
 Read the "Critical Code Paths" and "Agent Maintenance Rules" sections first.
 """
 
@@ -15,24 +15,24 @@ Read the "Critical Code Paths" and "Agent Maintenance Rules" sections first.
 # ──────────────────────────────────────────────────────────────────────────────
 """
 The CLI is a thin Typer wrapper around a set of GCP-orchestration managers.
-The entry point is ingestion.cli:app (see pyproject.toml [project.scripts]).
+The entry point is lake_cli.cli:app (see pyproject.toml [project.scripts]).
 
 Key abstractions
 ----------------
-• Config (ingestion/config.py)
+• Config (lake_cli/config.py)
     – Pydantic BaseModel that resolves project_id from gcloud or env var.
     – Supports cross-project scenarios (data_project_id vs catalog_project_id).
     – TABLES = ["audience", "cookie_registry", "campaigns", "creatives",
                 "pixel_events", "transactions"] is the single source of truth
       for the six marketing tables.
 
-• HybridMetadataEnricher (ingestion/table_and_column_insights.py)
+• HybridMetadataEnricher (lake_cli/table_and_column_insights.py)
     – Enriches BigQuery table/column descriptions from TWO mutually-exclusive
       sources: manual YAML files OR Google Dataplex insights.
     – NEVER combines both in the same run.  The design principle is clean
       separation (see module docstring).
 
-• BusinessGlossaryManager (ingestion/glossary_manager.py)
+• BusinessGlossaryManager (lake_cli/glossary_manager.py)
     – Dataplex Glossary REST API client.  Upserts glossaries, categories,
       terms, synonym links, and related-term links.
 
@@ -95,7 +95,7 @@ Call graph (with --table-names + --metadata-files)
 """
 A. _generate_descriptions_core default parameter trap
 -------------------------------------------------------
-File: ingestion/table_and_column_insights.py
+File: lake_cli/table_and_column_insights.py
 Line: 51-52
 
 def _generate_descriptions_core(
@@ -118,7 +118,7 @@ public methods.
 
 B. Strict filename matching in manual mode
 ------------------------------------------
-File: ingestion/table_and_column_insights.py
+File: lake_cli/table_and_column_insights.py
 Method: _load_manual_descriptions
 
 When metadata_file is None, the code looks for:
@@ -139,7 +139,7 @@ Fix pattern (used by generate_descriptions):
 
 C. generate_descriptions_for_tables_with_files does its own loop
 ------------------------------------------------------------------
-File: ingestion/table_and_column_insights.py
+File: lake_cli/table_and_column_insights.py
 Lines: 124-184
 
 This method duplicates the logic from _generate_descriptions_core
@@ -159,7 +159,7 @@ Google insights and ignore the explicit metadata_files.  This is a foot-gun.
 # 4. Configuration & Environment
 # ──────────────────────────────────────────────────────────────────────────────
 """
-Config resolution order (ingestion/config.py)
+Config resolution order (lake_cli/config.py)
 ---------------------------------------------
 1. Explicit CLI flags (--data-project, --catalog-project, etc.)
 2. gcloud config get-value project  (subprocess, 5s timeout)
@@ -185,7 +185,7 @@ Directory layout expected at runtime
 │   ├── campaigns.yaml
 │   ├── ...
 │   └── glossary.yaml
-├── ingestion/
+├── lake_cli/
 │   ├── cli.py
 │   ├── config.py
 │   ├── table_and_column_insights.py
@@ -249,14 +249,14 @@ Core external libraries
 
 Internal import graph (simplified)
 -----------------------------------
-ingestion.cli  imports  Config, HybridMetadataEnricher, BusinessGlossaryManager,
+lake_cli.cli  imports  Config, HybridMetadataEnricher, BusinessGlossaryManager,
                         LakehouseCatalogManager, DataplexManager, CatalogManager,
                         TagWriter, GlossaryWriter, DataProfilingManager,
                         DataQualityManager, DatasetInsightsManager,
                         VectorSearchManager, BQMLGeminiManager,
                         ContinuousQueryManager, RelatedEntriesManager
 
-No other module depends on ingestion.cli (it is the top-level orchestrator).
+No other module depends on lake_cli.cli (it is the top-level orchestrator).
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -303,17 +303,17 @@ Task: "Fix a bug where manual YAML is ignored"
   → Likely need to pass use_google_insights=False and build a table_id→file map.
 
 Task: "Add a new enrich-metadata flag"
-  → Modify ingestion/cli.py enrich_metadata() signature (typer.Option).
+  → Modify lake_cli/cli.py enrich_metadata() signature (typer.Option).
   → Forward the flag to the appropriate HybridMetadataEnricher method.
   → Add a test in tests/cli/test_enrich.py that asserts the flag is forwarded.
 
 Task: "Change how Dataplex scans are created"
-  → Modify _generate_table_insights in ingestion/table_and_column_insights.py.
+  → Modify _generate_table_insights in lake_cli/table_and_column_insights.py.
   → This method fires a one-time DATA_DOCUMENTATION scan via REST (not gRPC).
   → The scan is asynchronous; results are published to BigQuery via table labels.
 
 Task: "Update the preset table list"
-  → Change Config.TABLES in ingestion/config.py.
+  → Change Config.TABLES in lake_cli/config.py.
   → Update any hard-coded references in docs/ or metadata/ templates.
-  → Regenerate templates with `uv run python -m ingestion.cli create-templates`.
+  → Regenerate templates with `uv run lake create-templates`.
 """

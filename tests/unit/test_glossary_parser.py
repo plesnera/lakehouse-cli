@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ingestion.glossary_manager import (
+from lake_cli.glossary_manager import (
     parse_glossary_markdown,
     parse_glossary_yaml,
     _slugify,

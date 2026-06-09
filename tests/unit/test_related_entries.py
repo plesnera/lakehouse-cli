@@ -1,10 +1,10 @@
-"""Unit tests for ingestion.related_entries helpers and matching logic."""
+"""Unit tests for lake_cli.related_entries helpers and matching logic."""
 
 from __future__ import annotations
 
 import pytest
 
-from ingestion.related_entries import (
+from lake_cli.related_entries import (
     ApplyResult,
     ExactMatch,
     FuzzyProposal,
@@ -240,7 +240,7 @@ class TestScoreColumn:
 
 class TestPhaseAMatching:
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="test-project",
             catalog_project_id="test-project",
@@ -313,7 +313,7 @@ class TestPhaseAMatching:
 
 class TestPhaseBMatching:
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="test-project",
             catalog_project_id="test-project",
@@ -373,7 +373,7 @@ class TestPhaseBMatching:
 
 class TestExportAndLoadProposalsYaml:
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="test-project",
             catalog_project_id="test-project",
@@ -593,7 +593,7 @@ class TestBuildEntryNames:
 
 class TestApplyProposalsDryRun:
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="test-project",
             catalog_project_id="test-project",
@@ -713,7 +713,7 @@ class TestExportProposalsYaml:
     """
 
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="test-project",
             catalog_project_id="test-project",
@@ -791,7 +791,7 @@ class TestApplyProposalsGcloudCall:
     """
 
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="wpp-dataproducts-lakehouse",
             catalog_project_id="wpp-dataproducts-lakehouse",
@@ -871,7 +871,7 @@ class TestApplyProposalsGcloudCall:
             with patch.object(mgr, "_resolve_project_number", return_value="wpp-dataproducts-lakehouse"):
                 with patch.object(mgr, "_resolve_glossary_inner_project", return_value="wpp-dataproducts-lakehouse"):
                     with patch(
-                        "ingestion.related_entries.subprocess.run",
+                        "lake_cli.related_entries.subprocess.run",
                         side_effect=fake_run,
                     ):
                         mgr.apply_proposals(proposals_path, dry_run=False)
@@ -943,7 +943,7 @@ class TestApplyProposalsGcloudCall:
             with patch.object(mgr, "_resolve_project_number", return_value="wpp-dataproducts-lakehouse"):
                 with patch.object(mgr, "_resolve_glossary_inner_project", return_value="wpp-dataproducts-lakehouse"):
                     with patch(
-                        "ingestion.related_entries.subprocess.run",
+                        "lake_cli.related_entries.subprocess.run",
                         side_effect=self._capture_subprocess_run(captured_args),
                     ):
                         mgr.apply_proposals(proposals_path, dry_run=False)
@@ -984,7 +984,7 @@ class TestCreateEntryLink:
         from unittest.mock import patch
         mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)  # bypass __init__
         with patch(
-            "ingestion.related_entries.subprocess.run",
+            "lake_cli.related_entries.subprocess.run",
             return_value=self._ok_result(),
         ) as mock_run:
             outcome, detail = mgr._create_entry_link(
@@ -1034,7 +1034,7 @@ class TestCreateEntryLink:
             return self._ok_result()
 
         mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)
-        with patch("ingestion.related_entries.subprocess.run", side_effect=fake_run):
+        with patch("lake_cli.related_entries.subprocess.run", side_effect=fake_run):
             mgr._create_entry_link(
                 project="p",
                 location="l",
@@ -1056,9 +1056,9 @@ class TestCreateEntryLink:
         # can read the file.
         # (Re-run with monkey-patched unlink for inspection.)
         import tempfile as _tempfile
-        with patch("ingestion.related_entries.os.unlink"):  # don't delete
+        with patch("lake_cli.related_entries.os.unlink"):  # don't delete
             with patch(
-                "ingestion.related_entries.subprocess.run",
+                "lake_cli.related_entries.subprocess.run",
                 side_effect=fake_run,
             ):
                 mgr._create_entry_link(
@@ -1088,7 +1088,7 @@ class TestCreateEntryLink:
             "ALREADY_EXISTS: EntryLink already exists."
         )
         with patch(
-            "ingestion.related_entries.subprocess.run",
+            "lake_cli.related_entries.subprocess.run",
             return_value=self._err_result(err, rc=1),
         ):
             outcome, detail = mgr._create_entry_link(
@@ -1103,7 +1103,7 @@ class TestCreateEntryLink:
         mgr = RelatedEntriesManager.__new__(RelatedEntriesManager)
         err = "ERROR: (gcloud.alpha.dataplex.entry-links.create) Permission denied"
         with patch(
-            "ingestion.related_entries.subprocess.run",
+            "lake_cli.related_entries.subprocess.run",
             return_value=self._err_result(err, rc=1),
         ):
             outcome, detail = mgr._create_entry_link(
@@ -1126,7 +1126,7 @@ class TestEntryLinkIdSlugShape:
     """
 
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="p", catalog_project_id="p", location="us-east1",
         )
@@ -1167,7 +1167,7 @@ class TestEntryLinkIdSlugShape:
                 with patch.object(mgr, "_resolve_project_number", return_value="p"):
                     with patch.object(mgr, "_resolve_glossary_inner_project", return_value="p"):
                         with patch(
-                            "ingestion.related_entries.subprocess.run",
+                            "lake_cli.related_entries.subprocess.run",
                             side_effect=fake_run,
                         ):
                             mgr.apply_proposals(path, dry_run=False)
@@ -1214,7 +1214,7 @@ class TestApplyProposalsGcloudError:
     """
 
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="test-project",
             catalog_project_id="test-project",
@@ -1265,7 +1265,7 @@ class TestApplyProposalsGcloudError:
             with patch.object(mgr, "_resolve_project_number", return_value="test-project"):
                 with patch.object(mgr, "_resolve_glossary_inner_project", return_value="test-project"):
                     with patch(
-                        "ingestion.related_entries.subprocess.run",
+                        "lake_cli.related_entries.subprocess.run",
                         side_effect=fake_run,
                     ):
                         results = mgr.apply_proposals(proposals_path, dry_run=False)
@@ -1294,7 +1294,7 @@ class TestApplyProposalsGcloudError:
             with patch.object(mgr, "_resolve_project_number", return_value="test-project"):
                 with patch.object(mgr, "_resolve_glossary_inner_project", return_value="test-project"):
                     with patch(
-                        "ingestion.related_entries.subprocess.run",
+                        "lake_cli.related_entries.subprocess.run",
                         side_effect=fake_run,
                     ):
                         results = mgr.apply_proposals(proposals_path, dry_run=False)
@@ -1348,7 +1348,7 @@ class TestIterApplyRows:
 
 class TestResolveGlossaryInnerProject:
     def _make_manager(self):
-        from ingestion.config import Config
+        from lake_cli.config import Config
         config = Config(
             data_project_id="outer-proj",
             catalog_project_id="outer-proj",

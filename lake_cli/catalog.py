@@ -1,7 +1,7 @@
 from google.cloud import dataplex_v1
 from google.protobuf import field_mask_pb2
-from ingestion.config import Config, TABLES
-from ingestion.table_metadata import load_all_table_metadata
+from lake_cli.config import Config, TABLES
+from lake_cli.table_metadata import load_all_table_metadata
 
 
 class CatalogManager:

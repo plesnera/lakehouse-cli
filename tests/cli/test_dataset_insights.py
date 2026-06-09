@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from ingestion.cli import app
+from lake_cli.cli import app
 
 
 runner = CliRunner()
@@ -16,7 +16,7 @@ runner = CliRunner()
 class TestDatasetInsightsCommand:
     """dataset-insights CLI command — manages Dataplex dataset-level insights scans."""
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_no_flags_creates_and_runs_scan(self, mock_mgr_class):
         """Default behavior: create and run scan."""
         instance = mock_mgr_class.return_value
@@ -29,7 +29,7 @@ class TestDatasetInsightsCommand:
         instance.create_scan.assert_called_once_with(dry_run=False, timeout=600)
         instance.run_scan.assert_called_once()
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_dry_run_only_previews(self, mock_mgr_class):
         """--dry-run shows preview without creating scan."""
         instance = mock_mgr_class.return_value
@@ -41,7 +41,7 @@ class TestDatasetInsightsCommand:
         instance.create_scan.assert_called_once_with(dry_run=True, timeout=600)
         instance.run_scan.assert_not_called()
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_results_gets_latest_results(self, mock_mgr_class):
         """--results retrieves and displays latest results."""
         instance = mock_mgr_class.return_value
@@ -59,7 +59,7 @@ class TestDatasetInsightsCommand:
         assert result.exit_code == 0
         instance.get_results.assert_called_once()
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_run_flag_explicitly_triggers_scan(self, mock_mgr_class):
         """--run explicitly triggers scan creation and execution."""
         instance = mock_mgr_class.return_value
@@ -72,7 +72,7 @@ class TestDatasetInsightsCommand:
         instance.create_scan.assert_called_once_with(dry_run=False, timeout=600)
         instance.run_scan.assert_called_once()
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_results_with_timeout(self, mock_mgr_class):
         """--results passes timeout to get_results."""
         instance = mock_mgr_class.return_value
@@ -83,7 +83,7 @@ class TestDatasetInsightsCommand:
         assert result.exit_code == 0
         instance.get_results.assert_called_once_with(timeout=300)
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_create_scan_failure_handled(self, mock_mgr_class):
         """Create scan failure is handled gracefully."""
         instance = mock_mgr_class.return_value
@@ -96,7 +96,7 @@ class TestDatasetInsightsCommand:
         # Should not try to run if creation failed
         instance.run_scan.assert_not_called()
 
-    @patch("ingestion.cli.DatasetInsightsManager")
+    @patch("lake_cli.cli.DatasetInsightsManager")
     def test_timeout_passed_to_create_scan(self, mock_mgr_class):
         """--timeout is passed to create_scan when not using --results."""
         instance = mock_mgr_class.return_value

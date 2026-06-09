@@ -1,4 +1,4 @@
-"""Unit tests for HybridMetadataEnricher in ingestion/table_and_column_insights.py."""
+"""Unit tests for HybridMetadataEnricher in lake_cli/table_and_column_insights.py."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ingestion.config import Config
-from ingestion.table_and_column_insights import HybridMetadataEnricher
+from lake_cli.config import Config
+from lake_cli.table_and_column_insights import HybridMetadataEnricher
 
 
 class TestDiscoverManualMetadata:
     """Regression tests for Issue #10 — enrich-metadata ignores manual YAML files."""
 
-    @patch("ingestion.table_and_column_insights.bigquery.Client")
+    @patch("lake_cli.table_and_column_insights.bigquery.Client")
     def test_generate_descriptions_discovers_yaml_by_table_id(
         self, mock_client_class
     ):
@@ -74,7 +74,7 @@ class TestDiscoverManualMetadata:
                     "user_id": "Unique user identifier."
                 }
 
-    @patch("ingestion.table_and_column_insights.bigquery.Client")
+    @patch("lake_cli.table_and_column_insights.bigquery.Client")
     def test_generate_descriptions_for_tables_passes_use_google_insights_false(
         self, mock_client_class
     ):

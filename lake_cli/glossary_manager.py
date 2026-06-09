@@ -25,7 +25,7 @@ from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataplex_v1
 from google.protobuf import field_mask_pb2
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 # ---------------------------------------------------------------------------

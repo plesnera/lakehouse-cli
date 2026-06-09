@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 # ---------------------------------------------------------------------------

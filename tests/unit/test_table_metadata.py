@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ingestion.table_metadata import (
+from lake_cli.table_metadata import (
     parse_table_metadata,
     load_all_table_metadata,
     _parse_dq_rule_line,

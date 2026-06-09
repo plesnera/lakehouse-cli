@@ -1,5 +1,5 @@
 from google.cloud import dataplex_v1
-from ingestion.config import Config
+from lake_cli.config import Config
 
 class DataplexManager:
     def __init__(self, config: Config):

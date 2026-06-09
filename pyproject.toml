@@ -1,5 +1,5 @@
 [project]
-name = "lakehouse-content"
+name = "lake-cli"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
@@ -23,4 +23,11 @@ test = [
 ]
 
 [project.scripts]
-lakehouse = "ingestion.cli:app"
+lake = "lake_cli.cli:app"
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = ["lake_cli*"]
+exclude = ["dataform*", "metadata*", "tests*", "docs*"]

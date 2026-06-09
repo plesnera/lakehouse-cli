@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from ingestion.cli import app
+from lake_cli.cli import app
 
 
 runner = CliRunner()
@@ -16,7 +16,7 @@ runner = CliRunner()
 class TestListRelatedEntries:
     """list-related-entries CLI command."""
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_calls_manager_with_term(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.list_related_entries.return_value = []
@@ -26,7 +26,7 @@ class TestListRelatedEntries:
             term_name="advertiser", glossary=None
         )
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_calls_manager_with_glossary(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.list_related_entries.return_value = []
@@ -51,7 +51,7 @@ class TestListRelatedEntries:
 class TestScanForRelatedEntries:
     """scan-for-related-entries CLI command."""
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_calls_manager_with_catalog(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.scan_for_related_entries.return_value = ([], [])
@@ -64,7 +64,7 @@ class TestScanForRelatedEntries:
             catalog_name="my-catalog", namespace=None, glossary=None, fuzzy_score_threshold=0
         )
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_calls_manager_with_all_options(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.scan_for_related_entries.return_value = ([], [])
@@ -89,7 +89,7 @@ class TestScanForRelatedEntries:
         result = runner.invoke(app, ["scan-for-related-entries"])
         assert result.exit_code != 0
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_namespace_optional(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.scan_for_related_entries.return_value = ([], [])
@@ -101,7 +101,7 @@ class TestScanForRelatedEntries:
         call_kwargs = instance.scan_for_related_entries.call_args
         assert call_kwargs[1]["namespace"] is None or call_kwargs[0][1] is None
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_output_flag_triggers_export(self, mock_mgr_class):
         """When --output is provided, export_proposals_yaml is called with
         project/location derived from the discovered glossary's resource path."""
@@ -131,7 +131,7 @@ class TestScanForRelatedEntries:
         assert call_kwargs[1]["glossary_project"] == "p"
         assert call_kwargs[1]["glossary_location"] == "l"
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_project_location_overrides(self, mock_mgr_class):
         """--project and --location flags take precedence over the
         project/location parsed out of the discovered glossary's name."""
@@ -156,7 +156,7 @@ class TestScanForRelatedEntries:
         assert call_kwargs[1]["glossary_project"] == "override-proj"
         assert call_kwargs[1]["glossary_location"] == "eu-west1"
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_no_output_flag_skips_export(self, mock_mgr_class):
         """Without --output, export_proposals_yaml is NOT called."""
         instance = mock_mgr_class.return_value
@@ -172,7 +172,7 @@ class TestScanForRelatedEntries:
 class TestApplyRelatedEntries:
     """apply-related-entries CLI command."""
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_calls_apply_proposals(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.apply_proposals.return_value = []
@@ -189,7 +189,7 @@ class TestApplyRelatedEntries:
             location_override=None,
         )
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_dry_run_flag(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.apply_proposals.return_value = []
@@ -201,7 +201,7 @@ class TestApplyRelatedEntries:
         call_kwargs = instance.apply_proposals.call_args
         assert call_kwargs[1]["dry_run"] is True
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_override_flags(self, mock_mgr_class):
         instance = mock_mgr_class.return_value
         instance.apply_proposals.return_value = []
@@ -228,7 +228,7 @@ class TestApplyRelatedEntries:
         result = runner.invoke(app, ["apply-related-entries"])
         assert result.exit_code != 0
 
-    @patch("ingestion.cli.RelatedEntriesManager")
+    @patch("lake_cli.cli.RelatedEntriesManager")
     def test_error_detail_includes_gcloud_stderr(self, mock_mgr_class):
         """CLI passes through ApplyResult detail fields; the unit test in
         tests/unit/test_related_entries.py verifies that the underlying

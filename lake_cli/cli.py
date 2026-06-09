@@ -1,21 +1,21 @@
 import json
 
 import typer
-from ingestion.config import Config, TABLES
-from ingestion.dataplex_lake import DataplexManager
-from ingestion.catalog import CatalogManager
-from ingestion.tag_writer import TagWriter
-from ingestion.glossary_writer import GlossaryWriter
-from ingestion.table_and_column_insights import HybridMetadataEnricher
-from ingestion.glossary_manager import BusinessGlossaryManager
-from ingestion.lakehouse_catalog import LakehouseCatalogManager
-from ingestion.data_profiling import DataProfilingManager
-from ingestion.data_quality import DataQualityManager
-from ingestion.dataset_insights import DatasetInsightsManager
-from ingestion.vector_search import VectorSearchManager
-from ingestion.bqml_gemini import BQMLGeminiManager
-from ingestion.continuous_queries import ContinuousQueryManager
-from ingestion.related_entries import RelatedEntriesManager
+from lake_cli.config import Config, TABLES
+from lake_cli.dataplex_lake import DataplexManager
+from lake_cli.catalog import CatalogManager
+from lake_cli.tag_writer import TagWriter
+from lake_cli.glossary_writer import GlossaryWriter
+from lake_cli.table_and_column_insights import HybridMetadataEnricher
+from lake_cli.glossary_manager import BusinessGlossaryManager
+from lake_cli.lakehouse_catalog import LakehouseCatalogManager
+from lake_cli.data_profiling import DataProfilingManager
+from lake_cli.data_quality import DataQualityManager
+from lake_cli.dataset_insights import DatasetInsightsManager
+from lake_cli.vector_search import VectorSearchManager
+from lake_cli.bqml_gemini import BQMLGeminiManager
+from lake_cli.continuous_queries import ContinuousQueryManager
+from lake_cli.related_entries import RelatedEntriesManager
 
 app = typer.Typer()
 
@@ -29,14 +29,14 @@ def _run_catalog(config: Config):
         return
 
     # 1. Lakehouse REST Catalog (Iceberg) - replaces BigLakeRegistrar
-    lakehouse = LakehouseCatalogManager(config)
-    result = lakehouse.ensure_catalog()
+    lake_catalog = LakehouseCatalogManager(config)
+    result = lake_catalog.ensure_catalog()
     if not result.get("catalog_exists", False):
         print(f"❌ Catalog does not exist: {config.lakehouse_catalog_name}")
         print("   Create it manually in GCP Console first, then re-run.")
         return
 
-    lakehouse.ensure_namespace()
+    lake_catalog.ensure_namespace()
 
     # 2. Dataplex Lake Topology
     dp = DataplexManager(config)
@@ -61,7 +61,7 @@ def _run_catalog(config: Config):
     gloss.apply()
 
     # 6. Metadata Enrichment (Optional - can be time-consuming)
-    print("Note: Run 'uv run python -m ingestion.cli enrich-metadata' to add table/column descriptions")
+    print("Note: Run 'uv run lake enrich-metadata' to add table/column descriptions")
 
 
 @app.command()
@@ -116,13 +116,13 @@ def setup_catalog(
 
     Examples:
         # Preview what would be done
-        uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full --dry-run
+        uv run lake setup-catalog --catalog-name marketing-lakehouse --full --dry-run
 
         # Verify catalog and create namespace
-        uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse --full
+        uv run lake setup-catalog --catalog-name marketing-lakehouse --full
 
         # Verify catalog only (no namespace)
-        uv run python -m ingestion.cli setup-catalog --catalog-name marketing-lakehouse
+        uv run lake setup-catalog --catalog-name marketing-lakehouse
     """
     config = Config()
 
@@ -130,17 +130,17 @@ def setup_catalog(
     if catalog_name:
         config.lakehouse_catalog_name = catalog_name
 
-    lakehouse = LakehouseCatalogManager(config)
+    lake_catalog = LakehouseCatalogManager(config)
 
     # First verify catalog exists (user must create manually)
-    result = lakehouse.ensure_catalog(dry_run=dry_run)
+    result = lake_catalog.ensure_catalog(dry_run=dry_run)
     if not result.get("catalog_exists", False):
         print("❌ Catalog does not exist. Create it manually first.")
         return
 
     if full:
         # Create namespace
-        lakehouse.ensure_namespace(dry_run=dry_run)
+        lake_catalog.ensure_namespace(dry_run=dry_run)
 
 
 @app.command()
@@ -160,29 +160,29 @@ def enrich_metadata(
     Examples:
         # Mode 1: Manual approach
         # Enrich all tables (uses default YAML files if they exist)
-        uv run python -m ingestion.cli enrich-metadata
+        uv run lake enrich-metadata
 
         # You can use the automated google insights as a starting point by running and then copy-paste in to YAML
         # Enrich specific tables with manual files
-        uv run python -m ingestion.cli enrich-metadata \\
+        uv run lake enrich-metadata \\
           --table-names wpp-dataproducts-lakehouse.marketing.audience,wpp-dataproducts-lakehouse.marketing.campaigns \\
           --metadata-files audience.yaml,campaigns.yaml
 
         # Mode 2: Google insights only (no manual files needed)
         # Enrich specific tables with pure Google insights
-        uv run python -m ingestion.cli enrich-metadata \\
+        uv run lake enrich-metadata \\
           --table-names wpp-dataproducts-lakehouse.marketing.campaigns \\
           --google-insights
 
         # Enrich all tables with pure Google insights
-        uv run python -m ingestion.cli enrich-metadata --google-insights
+        uv run lake enrich-metadata --google-insights
 
         # Preview changes without applying (dry-run mode)
-        uv run python -m ingestion.cli enrich-metadata --dry-run
-        uv run python -m ingestion.cli enrich-metadata --table-names campaigns --google-insights --dry-run
+        uv run lake enrich-metadata --dry-run
+        uv run lake enrich-metadata --table-names campaigns --google-insights --dry-run
 
         # Create YAML metadata templates for manual descriptions
-        uv run python -m ingestion.cli create-templates
+        uv run lake create-templates
     """
     config = Config()
     enricher = HybridMetadataEnricher(config)
@@ -237,7 +237,7 @@ def create_templates():
     business glossary definitions that you can edit before running enrichment.
 
     Example:
-        uv run python -m ingestion.cli create-templates
+        uv run lake create-templates
     """
     config = Config()
     enricher = HybridMetadataEnricher(config)
@@ -265,22 +265,22 @@ def manage_glossary(
 
     Examples:
         # Preview what would be created
-        uv run python -m ingestion.cli manage-glossary --dry-run
+        uv run lake manage-glossary --dry-run
 
         # Create glossary from default template
-        uv run python -m ingestion.cli manage-glossary --action create
+        uv run lake manage-glossary --action create
 
         # Create from a custom file
-        uv run python -m ingestion.cli manage-glossary --action create --input my_glossary.yaml
+        uv run lake manage-glossary --action create --input my_glossary.yaml
 
         # Reset and recreate
-        uv run python -m ingestion.cli manage-glossary --action create --reset
+        uv run lake manage-glossary --action create --reset
 
         # Validate existing glossary
-        uv run python -m ingestion.cli manage-glossary --action validate
+        uv run lake manage-glossary --action validate
 
         # Link terms to BigQuery assets
-        uv run python -m ingestion.cli manage-glossary --action apply
+        uv run lake manage-glossary --action apply
     """
     config = Config()
     glossary_manager = BusinessGlossaryManager(config)
@@ -319,19 +319,19 @@ def dataset_insights(
 
     Examples:
         # Create and run scan (default behavior)
-        uv run python -m ingestion.cli dataset-insights
+        uv run lake dataset-insights
 
         # Preview scan without executing
-        uv run python -m ingestion.cli dataset-insights --dry-run
+        uv run lake dataset-insights --dry-run
 
         # Get latest results
-        uv run python -m ingestion.cli dataset-insights --results
+        uv run lake dataset-insights --results
 
         # Explicitly run scan
-        uv run python -m ingestion.cli dataset-insights --run
+        uv run lake dataset-insights --run
 
         # Write results to a custom file
-        uv run python -m ingestion.cli dataset-insights --results -o my_insights.json
+        uv run lake dataset-insights --results -o my_insights.json
     """
     config = Config()
     mgr = DatasetInsightsManager(config)
@@ -380,22 +380,22 @@ def quality(
 
     Examples:
         # Check if markdown rules match active Dataplex rules (no changes made)
-        uv run python -m ingestion.cli quality --check-rules
+        uv run lake quality --check-rules
 
         # Sync rules without running scans
-        uv run python -m ingestion.cli quality --sync-only
+        uv run lake quality --sync-only
 
         # Sync rules and run scans (default behavior)
-        uv run python -m ingestion.cli quality
+        uv run lake quality
 
         # Preview what would be synced
-        uv run python -m ingestion.cli quality --sync-only --dry-run
+        uv run lake quality --sync-only --dry-run
 
         # Run specific tables only
-        uv run python -m ingestion.cli quality --table-names campaigns,transactions
+        uv run lake quality --table-names campaigns,transactions
 
         # View results of previous runs
-        uv run python -m ingestion.cli quality --results
+        uv run lake quality --results
     """
     config = Config()
     mgr = DataQualityManager(config)
@@ -462,10 +462,10 @@ def list_related_entries(
 
     Examples:
         # Search for all entries with a column matching 'advertiser'
-        uv run python -m ingestion.cli list-related-entries --term advertiser
+        uv run lake list-related-entries --term advertiser
 
         # Specify a glossary
-        uv run python -m ingestion.cli list-related-entries --term brand \\
+        uv run lake list-related-entries --term brand \\
           --glossary marketing-business-glossary
     """
     config = Config()
@@ -498,21 +498,21 @@ def scan_for_related_entries(
 
     Examples:
         # Scan default catalog against default glossary
-        uv run python -m ingestion.cli scan-for-related-entries \\
+        uv run lake scan-for-related-entries \\
           --catalog wpp-dataproducts-lakehouse-warehouse
 
         # Scan with namespace filter
-        uv run python -m ingestion.cli scan-for-related-entries \\
+        uv run lake scan-for-related-entries \\
           --catalog wpp-dataproducts-lakehouse-warehouse \\
           --namespace marketing
 
         # Specify glossary explicitly
-        uv run python -m ingestion.cli scan-for-related-entries \\
+        uv run lake scan-for-related-entries \\
           --catalog wpp-dataproducts-lakehouse-warehouse \\
           --glossary marketing-business-glossary
 
         # Export proposals to YAML for curation
-        uv run python -m ingestion.cli scan-for-related-entries \\
+        uv run lake scan-for-related-entries \\
           --catalog wpp-dataproducts-lakehouse-warehouse \\
           --namespace marketing \\
           --output proposals.yaml \\
@@ -578,15 +578,15 @@ def apply_related_entries(
 
     Examples:
         # Preview changes
-        uv run python -m ingestion.cli apply-related-entries \\
+        uv run lake apply-related-entries \\
           --input proposals.yaml --dry-run
 
         # Execute
-        uv run python -m ingestion.cli apply-related-entries \\
+        uv run lake apply-related-entries \\
           --input proposals.yaml
 
         # Override glossary
-        uv run python -m ingestion.cli apply-related-entries \\
+        uv run lake apply-related-entries \\
           --input proposals.yaml --glossary my-glossary
     """
     config = Config()
@@ -618,9 +618,9 @@ def reset(
 
     # 1. Delete Lakehouse namespace (catalog itself must be deleted manually)
     print("Deleting Lakehouse namespace...")
-    lakehouse = LakehouseCatalogManager(config)
+    lake_catalog = LakehouseCatalogManager(config)
     try:
-        lakehouse.delete_namespace()
+        lake_catalog.delete_namespace()
     except Exception as e:
         print(f"  ⚠️  Lakehouse namespace reset: {e}")
 

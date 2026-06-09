@@ -19,7 +19,7 @@ import google.auth
 from google.auth.transport.requests import Request
 from google.cloud import bigquery
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 class DatasetInsightsManager:

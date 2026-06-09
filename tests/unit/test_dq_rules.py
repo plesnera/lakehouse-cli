@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from ingestion.data_quality import (
+from lake_cli.data_quality import (
     _rule_from_meta,
     _rule_to_dict,
     _rules_equal,
     _compare_rule_lists,
     RuleMeta,
 )
-from ingestion.table_metadata import RuleMeta as RuleMetaFromTable
+from lake_cli.table_metadata import RuleMeta as RuleMetaFromTable
 from google.cloud import dataplex_v1
 
 

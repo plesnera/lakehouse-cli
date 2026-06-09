@@ -39,12 +39,12 @@ uv sync
 gcloud config set project YOUR_PROJECT_ID
 
 # 2) Verify catalog and create namespace
-uv run python -m ingestion.cli setup-catalog \
+uv run lake setup-catalog \
   --catalog-name YOUR_CATALOG_NAME \
   --full
 
 # 3) Register Dataplex assets/entries/tags/glossary
-uv run python -m ingestion.cli catalog \
+uv run lake catalog \
   --catalog-name YOUR_CATALOG_NAME
 ```
 
@@ -65,13 +65,12 @@ uv run python -m ingestion.cli catalog \
 - `apply-related-entries`: Applies curated related-entry proposals from a YAML file by creating Dataplex `entryLinks` of type `entryLinkTypes/definition`
 - `reset`: Deletes namespace, glossary resources, and Dataplex entries (with `--confirm`)
 
-Detailed usage and examples: `docs/cli_functionality.md`
+Detailed usage and examples: `docs/lake-cli-details.md`
 
 ## Documentation index
-- `docs/cli_functionality.md`: Full CLI reference and workflows
-- `docs/data-engineering-agent.md`: Using BigQuery Data Engineering Agent with this metadata model
+- `docs/lake-cli-details.md`: Full CLI reference and workflows
+- `docs/BigQuery-lake-specialties.md`: BigQuery Graph/PGQ modeling reference and Data Engineering Agent setup guide
 - `docs/iceberg_rest_implementations.md`: Notes on BigLake Iceberg catalog operational constraints
-- `docs/Intro_to_BigQuery_graph.md`: BigQuery Graph/PGQ modeling reference
 
 ## References
 - https://cloud.google.com/dataplex

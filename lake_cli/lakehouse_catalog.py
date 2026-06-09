@@ -11,7 +11,7 @@ Uses gcloud CLI for catalog/namespace operations.
 import subprocess
 from typing import Dict
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 
 class LakehouseCatalogManager:

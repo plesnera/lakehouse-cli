@@ -8,7 +8,7 @@ Ref: https://cloud.google.com/bigquery/docs/vector-search-intro
 
 from google.cloud import bigquery
 
-from ingestion.config import Config
+from lake_cli.config import Config
 
 # SQL templates use the BigLake connection already configured in Config.
 _DATASET = "{project}.{namespace}"
